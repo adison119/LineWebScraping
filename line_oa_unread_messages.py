@@ -15,10 +15,18 @@ import argparse
 # รอสูงสุด (วินาที)
 DEFAULT_WAIT = 15
 
-# รายการ selector ที่จะลองตามลำดับ (LINE OA ใช้ list-group-item-chat, h6, div.text-muted.small, div.datetime)
+# รายการ selector ที่จะลองตามลำดับ
+# โครงสร้าง: แถวแชท > div.flex-1.hide-on-collapse > (ชื่อใน h6, ข้อความใน div.text-muted.small.text-truncate-box)
 # แถวแรก = รายการแชท, ตามด้วย ชื่อ, ข้อความล่าสุด, เวลา
 CONVERSATION_SELECTORS = [
-    # รูปแบบจริงของ LINE OA (จาก DOM หน้า chat.line.biz)
+    # รูปแบบจริงของ LINE OA: ข้อความอยู่ใน div.flex-1 ภายใน div.text-muted.small.text-truncate-box
+    (
+        "//div[contains(@class, 'list-group-item-chat')]",
+        ".//div[contains(@class, 'flex-1') and contains(@class, 'hide-on-collapse')]//h6[contains(@class, 'text-truncate')]",
+        ".//div[contains(@class, 'flex-1') and contains(@class, 'hide-on-collapse')]/div[contains(@class, 'text-muted') and contains(@class, 'text-truncate-box')]",
+        ".//div[contains(@class, 'datetime')]",
+    ),
+    # fallback: หาแบบกว้างในแถว
     (
         "//div[contains(@class, 'list-group-item-chat')]",
         ".//h6[contains(@class, 'text-truncate')]",
@@ -189,26 +197,18 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         if debug:
             debug_page_structure(driver, wait_seconds=5)
 
-        notified_messages = set()
-
         print(f"เริ่มตรวจสอบข้อความที่ยังไม่อ่านทุกๆ {check_interval_seconds} วินาที...")
+        print("(จะแสดงรายการที่ยังไม่อ่านทุกครั้ง จนกว่าจะเปิดอ่านแล้ว badge จึงหาย)\n")
         while True:
             current_unread_messages = get_unread_messages(driver, wait_seconds=10, debug=debug)
 
-            new_unread_found = False
-            for msg in current_unread_messages:
-                msg_id = f"{msg['sender']}-{msg['message']}-{msg['time']}"
-                if msg_id not in notified_messages:
-                    if not new_unread_found:
-                        print("\n--- พบข้อความที่ยังไม่อ่านใหม่! ---")
-                        new_unread_found = True
-                    print(f"ชื่อ: {msg['sender']}, ข้อความ: {msg['message']}, เวลา: {msg['time']}")
-                    notified_messages.add(msg_id)
-
-            if not new_unread_found and current_unread_messages:
-                print("ยังไม่พบข้อความที่ยังไม่อ่านใหม่ แต่ยังมีข้อความที่ยังไม่อ่านอยู่ (แจ้งเตือนไปแล้ว)")
-            elif not current_unread_messages:
-                print("ไม่พบข้อความที่ยังไม่อ่าน (หรือ selector ยังไม่ตรงกับหน้าเว็บ - ลองรันด้วย --debug)")
+            if current_unread_messages:
+                print("\n--- ข้อความที่ยังไม่อ่าน (ปัจจุบัน) ---")
+                for msg in current_unread_messages:
+                    print(f"  ชื่อ: {msg['sender']}, ข้อความ: {msg['message']}, เวลา: {msg['time']}")
+                print(f"  รวม {len(current_unread_messages)} รายการ\n")
+            else:
+                print("ไม่พบข้อความที่ยังไม่อ่าน")
 
             print(f"รอ {check_interval_seconds} วินาที ก่อนตรวจสอบอีกครั้ง...")
             time.sleep(check_interval_seconds)
