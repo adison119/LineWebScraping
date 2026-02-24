@@ -15,10 +15,18 @@ import argparse
 # รอสูงสุด (วินาที)
 DEFAULT_WAIT = 15
 
-# รายการ selector ที่จะลองตามลำดับ (LINE OA ใช้ list-group-item-chat, h6, div.text-muted.small, div.datetime)
+# รายการ selector ที่จะลองตามลำดับ
+# โครงสร้าง: แถวแชท > div.flex-1.hide-on-collapse > (ชื่อใน h6, ข้อความใน div.text-muted.small.text-truncate-box)
 # แถวแรก = รายการแชท, ตามด้วย ชื่อ, ข้อความล่าสุด, เวลา
 CONVERSATION_SELECTORS = [
-    # รูปแบบจริงของ LINE OA (จาก DOM หน้า chat.line.biz)
+    # รูปแบบจริงของ LINE OA: ข้อความอยู่ใน div.flex-1 ภายใน div.text-muted.small.text-truncate-box
+    (
+        "//div[contains(@class, 'list-group-item-chat')]",
+        ".//div[contains(@class, 'flex-1') and contains(@class, 'hide-on-collapse')]//h6[contains(@class, 'text-truncate')]",
+        ".//div[contains(@class, 'flex-1') and contains(@class, 'hide-on-collapse')]/div[contains(@class, 'text-muted') and contains(@class, 'text-truncate-box')]",
+        ".//div[contains(@class, 'datetime')]",
+    ),
+    # fallback: หาแบบกว้างในแถว
     (
         "//div[contains(@class, 'list-group-item-chat')]",
         ".//h6[contains(@class, 'text-truncate')]",
@@ -50,17 +58,17 @@ CONVERSATION_SELECTORS = [
 
 UNREAD_CLASS_PATTERNS = ["unread", "has-new", "new-message", "selected", "active"]
 
-# LINE OA: แถวที่ยังไม่อ่านจะมี span.badge.badge-pin.badge-primary หรือ span ตัวเลขเช่น (3), (7) ข้างชื่อ
+# LINE OA: ใช้เฉพาะจุดสีน้ำเงิน (badge-pin) เป็นตัวบอกยังไม่อ่าน
+# ถ้ามี span.badge-pin = ยังไม่อ่าน | ถ้า div.text-right ว่าง = อ่านแล้ว
+# หมายเหตุ: ตัวเลข (3), (7) ข้างชื่ออาจยังโชว์หลังอ่านแล้ว จึงไม่ใช้เป็นตัวตัดสิน
 UNREAD_BADGE_XPATH = ".//span[contains(@class, 'badge-pin')]"
-# span ตัวเลข unread ข้าง h6 อยู่ใน div.d-flex.align-items-center.mb-1 เป็น sibling ของ h6
-UNREAD_COUNT_SPAN_XPATH = ".//div[contains(@class, 'align-items-center') and contains(@class, 'mb-1')]//span[starts-with(normalize-space(), '(') and contains(normalize-space(), ')')]"
 
-# ถ้า True จะนับเฉพาะรายการที่มี badge/ตัวเลข unread; ถ้า False จะดึงทุกรายการ
+# ถ้า True จะนับเฉพาะรายการที่มี badge-pin; ถ้า False จะดึงทุกรายการ
 STRICT_UNREAD_ONLY = True
 
 
 def is_unread_element(element):
-    """เช็คว่าแถวแชทนี้ยังไม่อ่านหรือไม่ (class ตัวเอง หรือ LINE OA: badge-pin / ตัวเลขในวงเล็บ)"""
+    """เช็คว่าแถวแชทนี้ยังไม่อ่านหรือไม่ (ใช้เฉพาะ badge-pin สำหรับ LINE OA)"""
     try:
         cls = (element.get_attribute("class") or "").lower()
         for pattern in UNREAD_CLASS_PATTERNS:
@@ -69,20 +77,10 @@ def is_unread_element(element):
         aria = (element.get_attribute("aria-label") or "").lower()
         if "unread" in aria or "new" in aria:
             return True
-        # LINE OA: มีจุดสีน้ำเงิน (badge-pin) = ยังไม่อ่าน
+        # LINE OA: มีจุดสีน้ำเงิน (badge-pin) เท่านั้น = ยังไม่อ่าน (ไม่ใช้ตัวเลข (7) เพราะอาจยังโชว์หลังอ่านแล้ว)
         try:
             if element.find_elements(By.XPATH, UNREAD_BADGE_XPATH):
                 return True
-        except Exception:
-            pass
-        # LINE OA: มีตัวเลข unread ในวงเล็บเช่น (3), (7) ข้างชื่อ (ต้องเป็นตัวเลขเท่านั้น ไม่นับ (N)/(M)/ (B))
-        try:
-            for span in element.find_elements(By.XPATH, UNREAD_COUNT_SPAN_XPATH):
-                text = (span.text or "").strip()
-                if len(text) >= 3 and text[0] == "(" and text[-1] == ")":
-                    mid = text[1:-1].strip()
-                    if mid.isdigit():
-                        return True
         except Exception:
             pass
     except Exception:
@@ -91,10 +89,16 @@ def is_unread_element(element):
 
 
 def safe_find_text(parent, xpath, default=""):
-    """หา element เดียวแล้วเอา .text ถ้าไม่เจอคืน default"""
+    """หา element เดียวแล้วเอา .text หรือ textContent ถ้าไม่เจอคืน default"""
     try:
         el = parent.find_element(By.XPATH, xpath)
-        return (el.text or "").strip() if el else default
+        if not el:
+            return default
+        # ใช้ .text ก่อน; กรณีข้อความเป็น text โดยตรงใน div (ไม่มี span) บางครั้ง .text ว่าง ให้ลอง textContent
+        s = (el.text or "").strip()
+        if not s:
+            s = (el.get_attribute("textContent") or "").strip()
+        return s or default
     except Exception:
         return default
 
@@ -189,26 +193,18 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         if debug:
             debug_page_structure(driver, wait_seconds=5)
 
-        notified_messages = set()
-
         print(f"เริ่มตรวจสอบข้อความที่ยังไม่อ่านทุกๆ {check_interval_seconds} วินาที...")
+        print("(จะแสดงรายการที่ยังไม่อ่านทุกครั้ง จนกว่าจะเปิดอ่านแล้ว badge จึงหาย)\n")
         while True:
             current_unread_messages = get_unread_messages(driver, wait_seconds=10, debug=debug)
 
-            new_unread_found = False
-            for msg in current_unread_messages:
-                msg_id = f"{msg['sender']}-{msg['message']}-{msg['time']}"
-                if msg_id not in notified_messages:
-                    if not new_unread_found:
-                        print("\n--- พบข้อความที่ยังไม่อ่านใหม่! ---")
-                        new_unread_found = True
-                    print(f"ชื่อ: {msg['sender']}, ข้อความ: {msg['message']}, เวลา: {msg['time']}")
-                    notified_messages.add(msg_id)
-
-            if not new_unread_found and current_unread_messages:
-                print("ยังไม่พบข้อความที่ยังไม่อ่านใหม่ แต่ยังมีข้อความที่ยังไม่อ่านอยู่ (แจ้งเตือนไปแล้ว)")
-            elif not current_unread_messages:
-                print("ไม่พบข้อความที่ยังไม่อ่าน (หรือ selector ยังไม่ตรงกับหน้าเว็บ - ลองรันด้วย --debug)")
+            if current_unread_messages:
+                print("\n--- ข้อความที่ยังไม่อ่าน (ปัจจุบัน) ---")
+                for msg in current_unread_messages:
+                    print(f"  ชื่อ: {msg['sender']}, ข้อความ: {msg['message']}, เวลา: {msg['time']}")
+                print(f"  รวม {len(current_unread_messages)} รายการ\n")
+            else:
+                print("ไม่พบข้อความที่ยังไม่อ่าน")
 
             print(f"รอ {check_interval_seconds} วินาที ก่อนตรวจสอบอีกครั้ง...")
             time.sleep(check_interval_seconds)
