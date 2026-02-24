@@ -1,0 +1,11 @@
+# ค่าที่เก็บใน .env ไม่ควร commit
+.env
+
+# Chrome profile ของสคริปต์ (ลบได้เมื่อต้องการคืนพื้นที่)
+chrome_profile_line_oa/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
