@@ -214,15 +214,22 @@ def debug_page_structure(driver, wait_seconds=DEFAULT_WAIT):
     print("\n--- สิ้นสุด Debug (นำ class ที่เห็นไปใส่ใน CONVERSATION_SELECTORS ได้) ---\n")
 
 
-def _is_port_in_use(host="127.0.0.1", port=9222):
-    """ตรวจว่ามีอะไรใช้พอร์ตนี้อยู่หรือไม่ (ถ้ามี = พอร์ตเปิด, Chrome น่าจะรออยู่)"""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(1)
-            result = s.connect_ex((host, int(port)))
-            return result == 0
-    except Exception:
-        return False
+def _is_port_in_use(port=9222):
+    """Check if something is listening on this port (e.g. Chrome with remote debugging). Tries both IPv4 and IPv6 on Windows."""
+    port = int(port)
+    # Try IPv4 then IPv6 (Chrome on Windows may listen on either)
+    for family, addr in [
+        (socket.AF_INET, ("127.0.0.1", port)),
+        (socket.AF_INET6, ("::1", port)),
+    ]:
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                if s.connect_ex(addr) == 0:
+                    return True
+        except (OSError, socket.error):
+            continue
+    return False
 
 
 def _connect_to_existing_chrome(debug_port):
@@ -257,19 +264,19 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
             port_num = int(port)
         except ValueError:
             port_num = 9222
-        if not _is_port_in_use("127.0.0.1", port_num):
-            print(f"พอร์ต {port} ไม่มีอะไรใช้อยู่ (ยังไม่เปิด Chrome สำหรับสคริปต์)")
-            print("  → กรุณาเปิด Chrome ด้วย start_chrome_for_script.bat ก่อน แล้วรันสคริปต์อีกครั้ง")
+        if not _is_port_in_use(port_num):
+            print(f"Port {port} is not in use (no Chrome with remote debugging found).")
+            print("  -> Run start_chrome_for_script.bat first, then run this script again.")
             raise SystemExit(1)
-        print(f"พบการใช้งานที่พอร์ต {port} กำลังเชื่อมต่อกับ Chrome...")
+        print(f"Port {port} is in use. Connecting to Chrome...")
         try:
             driver = _connect_to_existing_chrome(port)
         except Exception:
-            print("เชื่อมต่อไม่สำเร็จ (อาจไม่ใช่ Chrome สำหรับสคริปต์)")
-            print("  → เปิด Chrome ด้วย start_chrome_for_script.bat แล้วล็อกอิน LINE OA ก่อนรันสคริปต์")
+            print("Connection failed (not a Chrome instance started by the script?).")
+            print("  -> Run start_chrome_for_script.bat, log in to LINE OA, then run this script again.")
             raise
         _switch_to_line_oa_tab(driver, url)
-        print("เชื่อมต่อกับ Chrome สำเร็จ (ใช้หน้าต่างที่ล็อกอินอยู่แล้ว)")
+        print("Connected to Chrome (using your existing LINE OA session).")
     else:
         if not os.path.isdir(CHROME_USER_DATA_DIR):
             os.makedirs(CHROME_USER_DATA_DIR, exist_ok=True)

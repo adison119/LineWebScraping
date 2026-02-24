@@ -19,8 +19,12 @@ if "%CHROME%"=="" (
   pause
   exit /b 1
 )
-start "" "%CHROME%" --remote-debugging-port=%PORT%
-echo Chrome started on port %PORT% - must match CHROME_DEBUG_PORT in .env
+REM Use a separate profile so this is a NEW Chrome process that really listens on PORT.
+REM If we don't, an already-running Chrome just opens a new window and ignores the port.
+set DEBUG_PROFILE=%~dp0chrome_debug_profile
+if not exist "%DEBUG_PROFILE%" mkdir "%DEBUG_PROFILE%"
+start "" "%CHROME%" --remote-debugging-port=%PORT% --user-data-dir="%DEBUG_PROFILE%"
+echo Chrome started on port %PORT% (profile: chrome_debug_profile) - must match CHROME_DEBUG_PORT in .env
 echo Log in to LINE OA, then run the Python script.
 echo.
 pause
