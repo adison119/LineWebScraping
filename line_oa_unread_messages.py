@@ -347,8 +347,8 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         driver.quit()
 
 
-if __name__ == "__main__":
-    default_url = os.environ.get("LINE_OA_URL") or "https://chat.line.biz/Ua891055e09d7e52c08c29828d0f662f7"
+if __name__ == "__main__":#กรอก url และ interval ใน .env
+    default_url = os.environ.get("LINE_OA_URL")
     try:
         default_interval = int(os.environ.get("LINE_OA_INTERVAL", "30"))
     except ValueError:
