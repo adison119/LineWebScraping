@@ -159,6 +159,29 @@ def _is_time_today(time_text):
     return False
 
 
+def _is_time_yesterday(time_text):
+    """เช็คว่า time_text แสดงเมื่อวาน (Yesterday / เมื่อวาน)"""
+    if not (time_text or "").strip():
+        return False
+    lower = (time_text or "").strip().lower()
+    return "yesterday" in lower or "เมื่อวาน" in lower or "วานนี้" in lower
+
+
+# ชื่อวันตามสัปดาห์ (อังกฤษ/ไทย) = เก่ากว่าเมื่อวาน → ใช้เป็นจุดหยุดดึงรายการ
+WEEKDAY_NAMES = (
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "จันทร์", "อังคาร", "พุธ", "พฤหัส", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์",
+)
+
+
+def _is_time_weekday_or_older(time_text):
+    """เช็คว่า time_text เป็นชื่อวัน (Monday / จันทร์ ฯลฯ) = เก่ากว่าเมื่อวาน → ให้หยุดดึงรายการ"""
+    if not (time_text or "").strip():
+        return False
+    lower = (time_text or "").strip().lower()
+    return any(day in lower for day in WEEKDAY_NAMES)
+
+
 def is_unread_element(element):
     """เช็คว่าแถวแชทนี้ยังไม่อ่านหรือไม่ (LINE OA: ใช้เฉพาะ span.badge-pin เป็นหลัก)"""
     try:
@@ -288,6 +311,146 @@ def get_read_today_conversations(driver, wait_seconds=DEFAULT_WAIT, debug=False)
     # เรียงให้แชทที่แสดง Yesterday อยู่ก่อน (สำหรับทดสอบ หรือตรวจจาก Yesterday ก่อน)
     result.sort(key=lambda r: (0 if "yesterday" in (r.get("time") or "").lower() else 1))
     return result
+
+
+def _scroll_chat_list_until_weekday(driver, step_px=400, max_scrolls=80, pause=0.3):
+    """
+    เลื่อนรายการแชทลงทีละน้อย จนกว่าจะเจอแชทที่เวลาเป็นวันตามสัปดาห์ (Monday / จันทร์ ฯลฯ)
+    แล้วหยุด = มีแชทวันนี้+เมื่อวานครบแล้ว ไม่เลื่อนเกินจำเป็น
+    """
+    conv_xpath = CONVERSATION_SELECTORS[0][0]
+    time_xpath = CONVERSATION_SELECTORS[0][3]
+    try:
+        els = driver.find_elements(By.XPATH, conv_xpath)
+        if not els:
+            return
+        container = None
+        try:
+            first = els[0]
+            for xpath in [
+                "./ancestor::div[contains(@class,'list-group')][1]",
+                "./ancestor::div[contains(@class,'overflow')][1]",
+                "./ancestor::div[contains(@class,'scroll')][1]",
+                "./ancestor::div[contains(@class,'sidebar') or contains(@class,'chat-list')][1]",
+                "./..",
+            ]:
+                try:
+                    parent = first.find_element(By.XPATH, xpath)
+                    if parent:
+                        sh = driver.execute_script("return arguments[0].scrollHeight;", parent)
+                        ch = driver.execute_script("return arguments[0].clientHeight;", parent)
+                        if sh > ch + 10:
+                            container = parent
+                            break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        if not container:
+            try:
+                container = driver.find_element(By.TAG_NAME, "body")
+            except Exception:
+                return
+        last_top = -1
+        for scroll_i in range(max_scrolls):
+            try:
+                # เช็คว่ามีแถวที่เวลาเป็นวัน (Monday ฯลฯ) แล้วหรือยัง → เจอแล้วหยุด scroll
+                conversations = driver.find_elements(By.XPATH, conv_xpath)
+                for conv in conversations:
+                    t = safe_find_text(conv, time_xpath)
+                    if _is_time_weekday_or_older(t):
+                        return
+                driver.execute_script("arguments[0].scrollTop += arguments[1];", container, step_px)
+                time.sleep(pause)
+                top = driver.execute_script("return arguments[0].scrollTop;", container)
+                height = driver.execute_script("return arguments[0].clientHeight;", container)
+                total = driver.execute_script("return arguments[0].scrollHeight;", container)
+                at_bottom = top + height >= total - 2
+                no_progress = top == last_top
+                if at_bottom:
+                    # อาจเป็นแค่กำลังโหลดข้อความเพิ่ม — รอแล้วเช็ค scrollHeight อีกครั้ง
+                    for wait_attempt in range(3):
+                        time.sleep(0.8)
+                        total2 = driver.execute_script("return arguments[0].scrollHeight;", container)
+                        if total2 > total:
+                            total = total2
+                            at_bottom = False
+                            break
+                    if at_bottom:
+                        break
+                if no_progress:
+                    break
+                last_top = top
+            except Exception:
+                break
+    except Exception:
+        pass
+
+
+def get_read_today_and_yesterday_conversations(driver, wait_seconds=DEFAULT_WAIT, debug=False):
+    """ดึงรายการแชทที่อ่านแล้วของวันนี้ + เมื่อวาน แยกเป็น (today_list, yesterday_list)"""
+    today_list = []
+    yesterday_list = []
+    try:
+        wait = WebDriverWait(driver, wait_seconds)
+        for conv_xpath, _name_xpath, _preview_xpath, _time_xpath in CONVERSATION_SELECTORS:
+            try:
+                wait.until(EC.presence_of_element_located((By.XPATH, conv_xpath)))
+                break
+            except Exception:
+                continue
+
+        # เลื่อนรายการแชทจนเจอแชทที่เวลาเป็นวัน (Monday ฯลฯ) แล้วหยุด = ได้แค่วันนี้+เมื่อวาน
+        _scroll_chat_list_until_weekday(driver)
+
+        for conv_xpath, name_xpath, preview_xpath, time_xpath in CONVERSATION_SELECTORS:
+            try:
+                conversations = driver.find_elements(By.XPATH, conv_xpath)
+            except Exception:
+                conversations = []
+
+            for conv in conversations:
+                try:
+                    if is_unread_element(conv):
+                        continue
+                    time_text = safe_find_text(conv, time_xpath)
+                    # เจอแชทที่เวลาเป็นวันตามสัปดาห์ (Monday / จันทร์ ฯลฯ) = เก่ากว่าเมื่อวาน → หยุดไม่ดึงต่อ
+                    if _is_time_weekday_or_older(time_text):
+                        if debug:
+                            print(f"[DEBUG] หยุดดึงรายการ: เจอวันเก่ากว่าเมื่อวาน time={time_text!r}")
+                        break
+                    if _is_time_today(time_text):
+                        name_text = safe_find_text(conv, name_xpath)
+                        message_text = safe_find_text(conv, preview_xpath)
+                        today_list.append({
+                            "sender": name_text or "(ไม่มีชื่อ)",
+                            "message": message_text or "(ไม่มีข้อความ)",
+                            "time": time_text or "(ไม่มีเวลา)",
+                            "element": conv,
+                        })
+                        if debug:
+                            print(f"[DEBUG] read+today: sender={name_text!r}, time={time_text!r}")
+                    elif _is_time_yesterday(time_text):
+                        name_text = safe_find_text(conv, name_xpath)
+                        message_text = safe_find_text(conv, preview_xpath)
+                        yesterday_list.append({
+                            "sender": name_text or "(ไม่มีชื่อ)",
+                            "message": message_text or "(ไม่มีข้อความ)",
+                            "time": time_text or "(ไม่มีเวลา)",
+                            "element": conv,
+                        })
+                        if debug:
+                            print(f"[DEBUG] read+yesterday: sender={name_text!r}, time={time_text!r}")
+                except Exception as e:
+                    if debug:
+                        print(f"[DEBUG] skip conv: {e}")
+                    continue
+
+            if today_list or yesterday_list:
+                break
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการดึงรายการอ่านแล้ววันนี้/เมื่อวาน: {e}")
+    return (today_list, yesterday_list)
 
 
 def debug_page_structure(driver, wait_seconds=DEFAULT_WAIT):
@@ -555,6 +718,54 @@ def get_read_not_replied_today(driver, our_names=None, wait_seconds=DEFAULT_WAIT
     return read_not_replied
 
 
+def _process_read_not_replied_rows(driver, rows, our_names, wait_seconds=DEFAULT_WAIT, debug=False):
+    """
+    วนแต่ละ row เปิดแชท → เช็ค is_last_message_from_us → ถ้าไม่ใช่ของเรา append เข้า result → กลับรายการ
+    ข้ามแถวที่ preview เป็น "You sent ..." / "You sent a sticker." เพื่อลดขั้นตอน (ไม่ต้องเปิดเข้าแชท)
+    """
+    if our_names is None:
+        our_names = _get_our_chat_header_names()
+    result = []
+    for row in rows:
+        preview = (row.get("message") or "").strip()
+        if preview.startswith("You sent ") or "You sent a sticker." in preview:
+            if debug:
+                print(f"[DEBUG] ข้าม (เราส่งไปแล้ว): {row.get('sender')!r} preview={preview[:50]!r}")
+            continue
+        try:
+            _open_conversation(driver, row["element"])
+            from_us = is_last_message_from_us(driver, our_names, wait_seconds=wait_seconds)
+            if not from_us:
+                result.append({
+                    "sender": row["sender"],
+                    "message": row["message"],
+                    "time": row["time"],
+                })
+                if debug:
+                    print(f"[DEBUG] read+not replied: {row['sender']!r}")
+            _back_to_list(driver)
+        except Exception as e:
+            if debug:
+                print(f"[DEBUG] skip row {row.get('sender')}: {e}")
+            try:
+                _back_to_list(driver)
+            except Exception:
+                pass
+            continue
+    return result
+
+
+def get_read_not_replied_today_and_yesterday(driver, our_names=None, wait_seconds=DEFAULT_WAIT, debug=False):
+    """
+    ดึงรายการอ่านแล้วแต่ยังไม่ตอบ แยกวันนี้และเมื่อวาน
+    return (read_not_replied_today, read_not_replied_yesterday)
+    """
+    today_rows, yesterday_rows = get_read_today_and_yesterday_conversations(driver, wait_seconds=wait_seconds, debug=debug)
+    read_not_replied_today = _process_read_not_replied_rows(driver, today_rows, our_names, wait_seconds=wait_seconds, debug=debug)
+    read_not_replied_yesterday = _process_read_not_replied_rows(driver, yesterday_rows, our_names, wait_seconds=wait_seconds, debug=debug)
+    return (read_not_replied_today, read_not_replied_yesterday)
+
+
 def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, debug=False, max_hours=None, chrome_debug_port=None, report_format="full", send_openclaw_target=None, for_test=False):
     """
     รันตรวจสอบข้อความที่ยังไม่อ่านต่อเนื่อง
@@ -630,14 +841,25 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         if debug:
             debug_page_structure(driver, wait_seconds=5)
         
-        # ถ้ารันแบบ One-shot เพื่อรายงานสรุป (สำหรับ cron job)
+        # ถ้ารันแบบ One-shot เพื่อรายงานสรุป (สำหรับ cron job) — แยกวันนี้/เมื่อวาน (ไม่เอาเก่ากว่าเมื่อวาน)
         if report_format == "summary-once":
             current_unread_messages = get_unread_messages(driver, wait_seconds=5, debug=debug)
+            unread_today = [m for m in current_unread_messages if _is_time_today(m.get("time") or "")]
+            unread_yesterday = [m for m in current_unread_messages if _is_time_yesterday(m.get("time") or "")]
             lines = []
-            if current_unread_messages:
-                lines.append(f"📥 รายงานข้อความที่ยังไม่ได้อ่าน [รวม {len(current_unread_messages)} รายการ]")
-                for msg in current_unread_messages:
-                    lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']} น.**")
+            total_today_yesterday = len(unread_today) + len(unread_yesterday)
+            if total_today_yesterday:
+                if unread_today:
+                    lines.append(f"📥 ยังไม่อ่าน วันนี้ [รวม {len(unread_today)} รายการ]")
+                    for msg in unread_today:
+                        lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']} น.**")
+                    lines.append("")
+                if unread_yesterday:
+                    lines.append(f"📥 ยังไม่อ่าน เมื่อวาน [รวม {len(unread_yesterday)} รายการ]")
+                    for msg in unread_yesterday:
+                        lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']}**")
+                    lines.append("")
+                lines.append(f"--- สรุป: ยังไม่อ่านรวม {total_today_yesterday} รายการ (วันนี้+เมื่อวาน) ---")
             else:
                 lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
             report_text = "\n".join(lines)
@@ -650,17 +872,25 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         if report_format == "read-not-replied-today":
             if for_test:
                 print("[For test] ตรวจเฉพาะแชทที่แสดง Yesterday", file=sys.stderr)
-            read_not_replied = get_read_not_replied_today(driver, wait_seconds=5, debug=debug, for_test=for_test)
+            read_not_replied_today, read_not_replied_yesterday = get_read_not_replied_today_and_yesterday(driver, wait_seconds=5, debug=debug)
+            if for_test:
+                read_not_replied_today = []
             lines = []
-            if read_not_replied:
-                prefix = "📋 อ่านแล้วแต่ยังไม่ตอบ (Yesterday เท่านั้น)" if for_test else "📋 อ่านแล้วแต่ยังไม่ตอบของวันนี้"
-                lines.append(f"{prefix} [รวม {len(read_not_replied)} รายการ]")
-                for msg in read_not_replied:
+            total = len(read_not_replied_today) + len(read_not_replied_yesterday)
+            if read_not_replied_today:
+                lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ วันนี้ [รวม {len(read_not_replied_today)} รายการ]")
+                for msg in read_not_replied_today:
                     lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
                 lines.append("")
-                lines.append(f"--- สรุป: อ่านแล้วแต่ยังไม่ตอบ {len(read_not_replied)} รายการ ---")
+            if read_not_replied_yesterday:
+                lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ เมื่อวาน [รวม {len(read_not_replied_yesterday)} รายการ]")
+                for msg in read_not_replied_yesterday:
+                    lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
+                lines.append("")
+            if total:
+                lines.append(f"--- สรุป: อ่านแล้วแต่ยังไม่ตอบ รวม {total} รายการ ---")
             else:
-                lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบของวันนี้" if not for_test else "ไม่พบแชทที่แสดง Yesterday ที่อ่านแล้วแต่ยังไม่ตอบ")
+                lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
                 lines.append("")
                 lines.append("--- สรุป: อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
             report_text = "\n".join(lines)
