@@ -51,11 +51,24 @@ DEFAULT_WAIT = 15
 # โฟลเดอร์เก็บ profile Chrome ของสคริปต์ (ล็อกอินจะถูกจำไว้ในโฟลเดอร์นี้ เปิดครั้งถัดไปจะยังล็อกอินอยู่)
 # ลบโฟลเดอร์นี้ = คืนพื้นที่ แต่ครั้งถัดไปต้องล็อกอินใหม่
 CHROME_USER_DATA_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "chrome_profile_line_oa"))
+# โฟลเดอร์เก็บ profile Chrome ของสคริปต์ (ล็อกอินจะถูกจำไว้ในโฟลเดอร์นี้ เปิดครั้งถัดไปจะยังล็อกอินอยู่)
+# ลบโฟลเดอร์นี้ = คืนพื้นที่ แต่ครั้งถัดไปต้องล็อกอินใหม่
+CHROME_USER_DATA_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "chrome_profile_line_oa"))
 
+# รายการ selector ที่จะลองตามลำดับ
+# โครงสร้าง: แถวแชท > div.flex-1.hide-on-collapse > (ชื่อใน h6, ข้อความใน div.text-muted.small.text-truncate-box)
 # รายการ selector ที่จะลองตามลำดับ
 # โครงสร้าง: แถวแชท > div.flex-1.hide-on-collapse > (ชื่อใน h6, ข้อความใน div.text-muted.small.text-truncate-box)
 # แถวแรก = รายการแชท, ตามด้วย ชื่อ, ข้อความล่าสุด, เวลา
 CONVERSATION_SELECTORS = [
+    # รูปแบบจริงของ LINE OA: ข้อความอยู่ใน div.flex-1 ภายใน div.text-muted.small.text-truncate-box
+    (
+        "//div[contains(@class, 'list-group-item-chat')]",
+        ".//div[contains(@class, 'flex-1') and contains(@class, 'hide-on-collapse')]//h6[contains(@class, 'text-truncate')]",
+        ".//div[contains(@class, 'flex-1') and contains(@class, 'hide-on-collapse')]/div[contains(@class, 'text-muted') and contains(@class, 'text-truncate-box')]",
+        ".//div[contains(@class, 'datetime')]",
+    ),
+    # fallback: หาแบบกว้างในแถว
     # รูปแบบจริงของ LINE OA: ข้อความอยู่ใน div.flex-1 ภายใน div.text-muted.small.text-truncate-box
     (
         "//div[contains(@class, 'list-group-item-chat')]",
@@ -161,8 +174,16 @@ def is_unread_element(element):
 
 def safe_find_text(parent, xpath, default=""):
     """หา element เดียวแล้วเอา .text หรือ textContent ถ้าไม่เจอคืน default"""
+    """หา element เดียวแล้วเอา .text หรือ textContent ถ้าไม่เจอคืน default"""
     try:
         el = parent.find_element(By.XPATH, xpath)
+        if not el:
+            return default
+        # ใช้ .text ก่อน; กรณีข้อความเป็น text โดยตรงใน div (ไม่มี span) บางครั้ง .text ว่าง ให้ลอง textContent
+        s = (el.text or "").strip()
+        if not s:
+            s = (el.get_attribute("textContent") or "").strip()
+        return s or default
         if not el:
             return default
         # ใช้ .text ก่อน; กรณีข้อความเป็น text โดยตรงใน div (ไม่มี span) บางครั้ง .text ว่าง ให้ลอง textContent
@@ -521,14 +542,24 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
             if report_format in ("summary-once", "read-not-replied-today"):
                 print("❌ ยังไม่ได้เข้าสู่ระบบ LINE OA และคุณกำลังรันในโหมดอัตโนมัติ (Cron Job) กรุณาเข้าสู่ระบบในเบราว์เซอร์ด้วยตนเองก่อน")
                 return  # จบการทำงานทันที ไม่รอ input เพื่อไม่ให้ cron job ค้าง
+            try:
+            has_chat_list = len(driver.find_elements(By.XPATH, "//div[contains(@class, 'list-group-item-chat')]")) > 0
+        except Exception:
+            has_chat_list = False
+        if not has_chat_list:
             print("โปรดล็อกอินเข้าสู่ระบบ LINE OA ในเบราว์เซอร์ที่เปิดขึ้นมา")
             try:
-                input("เมื่อล็อกอินเสร็จแล้วและเห็นหน้าแชทแล้ว โปรดกด Enter เพื่อดำเนินการต่อ...")
+                    input("เมื่อล็อกอินเสร็จแล้วและเห็นหน้าแชทแล้ว โปรดกด Enter เพื่อดำเนินการต่อ...")
             except EOFError:
                 print("⚠️ พบข้อผิดพลาดในการรับค่า Input (คาดว่ารันในเบื้องหลัง) กรุณาตรวจสอบการล็อกอิน")
                 return
         else:
             print("✅ เข้าสู่ระบบเรียบร้อยแล้ว")
+
+    start_time = time.time()
+    try:
+        else:
+            print("ใช้โปรไฟล์เดิม เข้าสู่ระบบอยู่แล้ว")
 
     start_time = time.time()
     try:
@@ -579,6 +610,9 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         if max_hours:
             print(f"จะหยุดหลังรันครบ {max_hours} ชั่วโมง (แนะนำให้ใช้ scheduler รันใหม่)")
         print("(จะแสดงรายการที่ยังไม่อ่านทุกครั้ง จนกว่าจะเปิดอ่านแล้ว badge จึงหาย)\n")
+        if max_hours:
+            print(f"จะหยุดหลังรันครบ {max_hours} ชั่วโมง (แนะนำให้ใช้ scheduler รันใหม่)")
+        print("(จะแสดงรายการที่ยังไม่อ่านทุกครั้ง จนกว่าจะเปิดอ่านแล้ว badge จึงหาย)\n")
         while True:
             if max_hours and (time.time() - start_time) >= max_hours * 3600:
                 print(f"\nครบ {max_hours} ชั่วโมง แล้ว หยุดทำงาน (ให้ scheduler รันสคริปต์ใหม่)")
@@ -609,6 +643,13 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         driver.quit()
 
 
+if __name__ == "__main__":#กรอก url และ interval ใน .env
+    default_url = os.environ.get("LINE_OA_URL")
+    try:
+        default_interval = int(os.environ.get("LINE_OA_INTERVAL", "30"))
+    except ValueError:
+        default_interval = 30
+    chrome_port = os.environ.get("CHROME_DEBUG_PORT", "").strip()
 if __name__ == "__main__":#กรอก url และ interval ใน .env
     default_url = os.environ.get("LINE_OA_URL")
     try:
