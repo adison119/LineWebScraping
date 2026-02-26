@@ -1,0 +1,15 @@
+# LINE OA - ตัวอย่าง crontab
+# ใส่ใน crontab -e (แก้ WORKSPACE ให้ตรงกับเครื่องคุณ ถ้าไม่ใช้ ~/.openclaw/workspace/LineWebScraping)
+
+WORKSPACE="${HOME}/.openclaw/workspace/LineWebScraping"
+
+# 1) ข้อความที่ยังไม่อ่าน: ทุก 1 ชม. 8:30, 9:30, ..., 17:30 (10 ครั้ง/วัน)
+30 8-17 * * * /bin/bash "$WORKSPACE/run_line_oa_job.sh" >> "$WORKSPACE/logs/unread.log" 2>&1
+
+# 2) อ่านแล้วแต่ยังไม่ตอบของวันนี้: ทุกวัน 17:35 ครั้งเดียว
+35 17 * * * /bin/bash "$WORKSPACE/run_read_not_replied_daily.sh" >> "$WORKSPACE/logs/read_not_replied.log" 2>&1
+
+# หมายเหตุ:
+# - สร้างโฟลเดอร์ logs: mkdir -p "$HOME/.openclaw/workspace/LineWebScraping/logs"
+# - Timezone ตามระบบ (ดู: date หรือ timedatectl)
+# - ถ้าใช้ Windows: ใช้ Task Scheduler ตั้งเวลาเรียก start_chrome_for_script.bat แล้วเรียก .bat ที่รัน Python แทน (หรือใช้ WSL แล้วใช้ cron ด้านบน)

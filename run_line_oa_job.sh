@@ -1,8 +1,8 @@
 #!/bin/bash
-# Job 1: รายงานข้อความที่ยังไม่อ่าน (summary-once) — รันเมื่อไหร่ก็ได้
-# Job 2: อ่านแล้วแต่ยังไม่ตอบของวันนี้ — ใช้ line_oa_read_not_replied_once.py ตั้งเวลาไว้หลังเลิกงาน
+# รายงานข้อความที่ยังไม่อ่าน (summary-once) — รันครั้งเดียวต่อครั้ง
+# ใช้กับ cron: ทุก 1 ชม. 8:30–17:30 (30 8-17 * * *)
 
-WORKSPACE="${HOME}/.openclaw/workspace/Line_Unread"
+WORKSPACE="${HOME}/.openclaw/workspace/LineWebScraping"
 cd "$WORKSPACE" || { echo "ไม่เจอโฟลเดอร์: $WORKSPACE"; exit 1; }
 
 # 1. เช็คพอร์ต 9222 ถ้าไม่เปิดก็รัน Chrome แล้วรอ 5 วินาที
