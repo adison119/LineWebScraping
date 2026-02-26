@@ -1,0 +1,38 @@
+# ไฟล์ข้อมูลลับ / ค่าที่ไม่ควรขึ้น GitHub
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*_secret*
+*_token*
+*credentials*
+*secrets*
+
+# โปรไฟล์ Chrome (อาจมี session/cookie)
+chrome_debug_profile/
+chrome_profile_line_oa/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+.eggs/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+
+# ชั่วคราว
+*.tmp
+*.temp
+.cache/

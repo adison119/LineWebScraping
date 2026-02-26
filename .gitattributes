@@ -1,0 +1,2 @@
+# บังคับให้ไฟล์ .sh ใช้ LF เสมอ (แก้ปัญหา unexpected end of file บน Mac)
+*.sh text eol=lf
