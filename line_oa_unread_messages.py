@@ -106,10 +106,12 @@ CONVERSATION_SELECTORS = [
     ),
 ]
 
-UNREAD_CLASS_PATTERNS = ["unread", "has-new", "new-message", "selected", "active"]
+# ไม่ใส่ "selected" / "active" เพราะแถวที่เปิดอยู่ (select) จะได้ class เหล่านั้น แต่แชทอาจอ่านแล้ว
+# ใช้เฉพาะ "unread", "has-new", "new-message" เป็น fallback; ตัวตัดสินหลัก = มี span.badge-pin หรือไม่
+UNREAD_CLASS_PATTERNS = ["unread", "has-new", "new-message"]
 
 # LINE OA: ใช้เฉพาะจุดสีน้ำเงิน (badge-pin) เป็นตัวบอกยังไม่อ่าน
-# ถ้ามี span.badge-pin = ยังไม่อ่าน | ถ้า div.text-right ว่าง = อ่านแล้ว
+# มี span.badge-pin ใน div.text-right = ยังไม่อ่าน | ไม่มี badge = อ่านแล้ว (แม้แถวจะถูก select อยู่)
 # หมายเหตุ: ตัวเลข (3), (7) ข้างชื่ออาจยังโชว์หลังอ่านแล้ว จึงไม่ใช้เป็นตัวตัดสิน
 UNREAD_BADGE_XPATH = ".//span[contains(@class, 'badge-pin')]"
 
@@ -154,8 +156,15 @@ def _is_time_today(time_text):
 
 
 def is_unread_element(element):
-    """เช็คว่าแถวแชทนี้ยังไม่อ่านหรือไม่ (ใช้เฉพาะ badge-pin สำหรับ LINE OA)"""
+    """เช็คว่าแถวแชทนี้ยังไม่อ่านหรือไม่ (LINE OA: ใช้เฉพาะ span.badge-pin เป็นหลัก)"""
     try:
+        # LINE OA: ใช้เฉพาะ badge-pin เป็นตัวตัดสิน — ถ้าไม่มี badge = อ่านแล้ว (แม้แถวจะ selected อยู่)
+        try:
+            if element.find_elements(By.XPATH, UNREAD_BADGE_XPATH):
+                return True
+        except Exception:
+            pass
+        # fallback สำหรับ UI อื่น: class หรือ aria ที่บ่ง unread
         cls = (element.get_attribute("class") or "").lower()
         for pattern in UNREAD_CLASS_PATTERNS:
             if pattern in cls:
@@ -163,12 +172,6 @@ def is_unread_element(element):
         aria = (element.get_attribute("aria-label") or "").lower()
         if "unread" in aria or "new" in aria:
             return True
-        # LINE OA: มีจุดสีน้ำเงิน (badge-pin) เท่านั้น = ยังไม่อ่าน (ไม่ใช้ตัวเลข (7) เพราะอาจยังโชว์หลังอ่านแล้ว)
-        try:
-            if element.find_elements(By.XPATH, UNREAD_BADGE_XPATH):
-                return True
-        except Exception:
-            pass
     except Exception:
         pass
     return False
@@ -176,19 +179,10 @@ def is_unread_element(element):
 
 def safe_find_text(parent, xpath, default=""):
     """หา element เดียวแล้วเอา .text หรือ textContent ถ้าไม่เจอคืน default"""
-    """หา element เดียวแล้วเอา .text หรือ textContent ถ้าไม่เจอคืน default"""
     try:
         el = parent.find_element(By.XPATH, xpath)
         if not el:
             return default
-        # ใช้ .text ก่อน; กรณีข้อความเป็น text โดยตรงใน div (ไม่มี span) บางครั้ง .text ว่าง ให้ลอง textContent
-        s = (el.text or "").strip()
-        if not s:
-            s = (el.get_attribute("textContent") or "").strip()
-        return s or default
-        if not el:
-            return default
-        # ใช้ .text ก่อน; กรณีข้อความเป็น text โดยตรงใน div (ไม่มี span) บางครั้ง .text ว่าง ให้ลอง textContent
         s = (el.text or "").strip()
         if not s:
             s = (el.get_attribute("textContent") or "").strip()
@@ -264,7 +258,7 @@ def get_read_today_conversations(driver, wait_seconds=DEFAULT_WAIT, debug=False)
             for conv in conversations:
                 try:
                     if is_unread_element(conv):
-                        continue  # ข้ามที่ยังไม่อ่าน
+                        continue  # ข้ามที่ยังไม่อ่าน (มี badge-pin)
                     time_text = safe_find_text(conv, time_xpath)
                     if not _is_time_today(time_text):
                         continue  # ข้ามที่ไม่ใช่วันนี้
