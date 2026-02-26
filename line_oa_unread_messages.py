@@ -124,6 +124,8 @@ OUR_CHAT_HEADER_NAMES = [
 
 # หน้ารายละเอียดแชท: block แชทหนึ่งกลุ่ม และ chat-header > span (ชื่อผู้ส่ง)
 CHAT_BLOCK_CSS = "div.chat.chat-text-dark.chat-reverse.chat-success"
+# บล็อกแชททุกประเภท (เรา + ลูกค้า) เรียงตาม DOM = ตามเวลา ใช้หาข้อความตัวสุดท้าย
+LAST_CHAT_BLOCK_CSS = "div.chat.chat-text-dark[class*='chat-reverse'], div.chat.chat-text-dark[class*='chat-secondary']"
 CHAT_HEADER_SPAN_XPATH = ".//div[contains(@class, 'chat-header')]//span"
 
 # รูปแบบเวลาวันนี้ (เช่น 17:27, 9:05); ถ้าไม่ตรง = แสดงเป็นข้อความเช่น เมื่อวาน
@@ -285,6 +287,8 @@ def get_read_today_conversations(driver, wait_seconds=DEFAULT_WAIT, debug=False)
                 break
     except Exception as e:
         print(f"เกิดข้อผิดพลาดในการดึงรายการอ่านแล้ววันนี้: {e}")
+    # เรียงให้แชทที่แสดง Yesterday อยู่ก่อน (สำหรับทดสอบ หรือตรวจจาก Yesterday ก่อน)
+    result.sort(key=lambda r: (0 if "yesterday" in (r.get("time") or "").lower() else 1))
     return result
 
 
@@ -421,22 +425,27 @@ def _back_to_list(driver):
 
 
 def is_last_message_from_us(driver, our_names, wait_seconds=5):
-    """ตรวจว่าข้อความล่าสุดในหน้านี้เป็นของเราหรือไม่ (ดูจาก chat-header ของ block สุดท้าย)"""
+    """
+    ตรวจว่าข้อความล่าสุดในหน้านี้เป็นของเราหรือไม่
+    - ใช้บล็อกตัวสุดท้ายจริง (chronological): ทั้ง chat-reverse และ chat-secondary
+    - ไม่มี chat-header = แชท 1:1 ฝั่งลูกค้า → ไม่ใช่เรา
+    - มี chat-header → เทียบกับ OUR_CHAT_HEADER_NAMES เท่านั้น (ตรง = เรา, ไม่ตรง = ลูกค้าแชทกลุ่ม)
+    """
     if not our_names:
         return False
     try:
         wait = WebDriverWait(driver, wait_seconds)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, CHAT_BLOCK_CSS)))
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)))
     except Exception:
         return False
     try:
-        blocks = driver.find_elements(By.CSS_SELECTOR, CHAT_BLOCK_CSS)
+        blocks = driver.find_elements(By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)
         if not blocks:
             return False
         last_block = blocks[-1]
         span_els = last_block.find_elements(By.XPATH, CHAT_HEADER_SPAN_XPATH)
         if not span_els:
-            return False
+            return False  # ไม่มี chat-header = แชท 1:1 ฝั่งลูกค้า
         header_text = (span_els[0].text or span_els[0].get_attribute("textContent") or "").strip()
         header_text = " ".join(header_text.split())
         for name in our_names:
@@ -445,21 +454,31 @@ def is_last_message_from_us(driver, our_names, wait_seconds=5):
             name_norm = " ".join(name.strip().split())
             if name_norm and (header_text == name_norm or name_norm in header_text):
                 return True
-        return False
+        return False  # มี header แต่ไม่ตรงชื่อเรา = ลูกค้าแชทกลุ่ม
     except Exception:
         return False
 
 
-def get_read_not_replied_today(driver, our_names=None, wait_seconds=DEFAULT_WAIT, debug=False):
+def get_read_not_replied_today(driver, our_names=None, wait_seconds=DEFAULT_WAIT, debug=False, for_test=False):
     """
     หารายการที่อ่านแล้ว + วันนี้ + ยังไม่ได้ตอบ (ข้อความล่าสุดไม่ใช่ของเรา)
     กดเข้าแต่ละแชทที่อ่านแล้วของวันนี้ เพื่อเช็ค chat-header ตัวสุดท้าย
+    ถ้า for_test=True จะเช็คเฉพาะแชทที่แสดงเวลา "Yesterday" (สำหรับทดสอบ)
     """
     if our_names is None:
         our_names = _get_our_chat_header_names()
     rows = get_read_today_conversations(driver, wait_seconds=wait_seconds, debug=debug)
+    if for_test:
+        rows = [r for r in rows if "yesterday" in (r.get("time") or "").lower()]
+        if debug and rows:
+            print(f"[DEBUG] for_test: ตรวจเฉพาะ Yesterday เหลือ {len(rows)} รายการ")
     read_not_replied = []
     for row in rows:
+        # ถ้า preview แสดง "You sent a sticker." = เราส่งสติกเกอร์ไปแล้ว ถือว่าตอบแล้ว ข้าม (ไม่ต้องกดเข้าแชท)
+        if "You sent a sticker." in (row.get("message") or ""):
+            if debug:
+                print(f"[DEBUG] ข้าม (เราส่งสติกเกอร์แล้ว): {row.get('sender')!r}")
+            continue
         try:
             _open_conversation(driver, row["element"])
             from_us = is_last_message_from_us(driver, our_names, wait_seconds=wait_seconds)
@@ -483,10 +502,11 @@ def get_read_not_replied_today(driver, our_names=None, wait_seconds=DEFAULT_WAIT
     return read_not_replied
 
 
-def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, debug=False, max_hours=None, chrome_debug_port=None, report_format="full", send_openclaw_target=None):
+def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, debug=False, max_hours=None, chrome_debug_port=None, report_format="full", send_openclaw_target=None, for_test=False):
     """
     รันตรวจสอบข้อความที่ยังไม่อ่านต่อเนื่อง
     ถ้าใส่ chrome_debug_port (หรือ CHROME_DEBUG_PORT ใน .env) = ใช้ Chrome ที่เปิดอยู่แล้ว ไม่ต้องเปิดใหม่
+    for_test: ใช้กับ report_format read-not-replied-today เท่านั้น — เช็คเฉพาะแชทที่แสดง Yesterday
     """
     driver = None
     use_existing = chrome_debug_port is not None and str(chrome_debug_port).strip() != ""
@@ -542,24 +562,14 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
             if report_format in ("summary-once", "read-not-replied-today"):
                 print("❌ ยังไม่ได้เข้าสู่ระบบ LINE OA และคุณกำลังรันในโหมดอัตโนมัติ (Cron Job) กรุณาเข้าสู่ระบบในเบราว์เซอร์ด้วยตนเองก่อน")
                 return  # จบการทำงานทันที ไม่รอ input เพื่อไม่ให้ cron job ค้าง
-            try:
-            has_chat_list = len(driver.find_elements(By.XPATH, "//div[contains(@class, 'list-group-item-chat')]")) > 0
-        except Exception:
-            has_chat_list = False
-        if not has_chat_list:
             print("โปรดล็อกอินเข้าสู่ระบบ LINE OA ในเบราว์เซอร์ที่เปิดขึ้นมา")
             try:
-                    input("เมื่อล็อกอินเสร็จแล้วและเห็นหน้าแชทแล้ว โปรดกด Enter เพื่อดำเนินการต่อ...")
+                input("เมื่อล็อกอินเสร็จแล้วและเห็นหน้าแชทแล้ว โปรดกด Enter เพื่อดำเนินการต่อ...")
             except EOFError:
                 print("⚠️ พบข้อผิดพลาดในการรับค่า Input (คาดว่ารันในเบื้องหลัง) กรุณาตรวจสอบการล็อกอิน")
                 return
         else:
             print("✅ เข้าสู่ระบบเรียบร้อยแล้ว")
-
-    start_time = time.time()
-    try:
-        else:
-            print("ใช้โปรไฟล์เดิม เข้าสู่ระบบอยู่แล้ว")
 
     start_time = time.time()
     try:
@@ -588,14 +598,21 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
 
         # รายงานอ่านแล้วแต่ยังไม่ตอบของวันนี้ (one-shot)
         if report_format == "read-not-replied-today":
-            read_not_replied = get_read_not_replied_today(driver, wait_seconds=5, debug=debug)
+            if for_test:
+                print("[For test] ตรวจเฉพาะแชทที่แสดง Yesterday", file=sys.stderr)
+            read_not_replied = get_read_not_replied_today(driver, wait_seconds=5, debug=debug, for_test=for_test)
             lines = []
             if read_not_replied:
-                lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบของวันนี้ [รวม {len(read_not_replied)} รายการ]")
+                prefix = "📋 อ่านแล้วแต่ยังไม่ตอบ (Yesterday เท่านั้น)" if for_test else "📋 อ่านแล้วแต่ยังไม่ตอบของวันนี้"
+                lines.append(f"{prefix} [รวม {len(read_not_replied)} รายการ]")
                 for msg in read_not_replied:
                     lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
+                lines.append("")
+                lines.append(f"--- สรุป: อ่านแล้วแต่ยังไม่ตอบ {len(read_not_replied)} รายการ ---")
             else:
-                lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบของวันนี้")
+                lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบของวันนี้" if not for_test else "ไม่พบแชทที่แสดง Yesterday ที่อ่านแล้วแต่ยังไม่ตอบ")
+                lines.append("")
+                lines.append("--- สรุป: อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
             report_text = "\n".join(lines)
             print(report_text)
             if send_openclaw_target:
@@ -643,14 +660,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         driver.quit()
 
 
-if __name__ == "__main__":#กรอก url และ interval ใน .env
-    default_url = os.environ.get("LINE_OA_URL")
-    try:
-        default_interval = int(os.environ.get("LINE_OA_INTERVAL", "30"))
-    except ValueError:
-        default_interval = 30
-    chrome_port = os.environ.get("CHROME_DEBUG_PORT", "").strip()
-if __name__ == "__main__":#กรอก url และ interval ใน .env
+if __name__ == "__main__":
     default_url = os.environ.get("LINE_OA_URL")
     try:
         default_interval = int(os.environ.get("LINE_OA_INTERVAL", "30"))
@@ -666,7 +676,9 @@ if __name__ == "__main__":#กรอก url และ interval ใน .env
     parser.add_argument("--report-format", type=str, choices=["full", "summary-once", "read-not-replied-today"], default="full",
                         help="รูปแบบการรายงาน: full (ข้อความเต็ม), summary-once (ชื่อและเวลา, รันครั้งเดียว), read-not-replied-today (อ่านแล้วยังไม่ตอบของวันนี้)")
     parser.add_argument("--send-openclaw-target", type=str, default=None, metavar="TARGET",
-                        help="ส่งผลรายงานไป openclaw ด้วย -t TARGET (เช่น webchat) ใช้คู่กับ --report-format summary-once")
+                        help="ส่งผลรายงานไป openclaw -t TARGET (ใช้คู่กับ summary-once หรือ read-not-replied-today)")
+    parser.add_argument("--for-test", action="store_true", dest="for_test",
+                        help="โหมดทดสอบ: ใช้กับ read-not-replied-today — เช็คเฉพาะแชทที่แสดง Yesterday")
     args = parser.parse_args()
 
     scrape_line_oa_unread_messages_continuous(
@@ -677,4 +689,5 @@ if __name__ == "__main__":#กรอก url และ interval ใน .env
         chrome_debug_port=args.connect_chrome,
         report_format=args.report_format,
         send_openclaw_target=args.send_openclaw_target,
+        for_test=args.for_test,
     )

@@ -1,9 +1,13 @@
 #!/bin/bash
+# Job 1: รายงานข้อความที่ยังไม่อ่าน (summary-once) — รันเมื่อไหร่ก็ได้
+# Job 2: อ่านแล้วแต่ยังไม่ตอบของวันนี้ — ใช้ line_oa_read_not_replied_once.py ตั้งเวลาไว้หลังเลิกงาน
+
 WORKSPACE="${HOME}/.openclaw/workspace/Line_Unread"
 cd "$WORKSPACE" || { echo "ไม่เจอโฟลเดอร์: $WORKSPACE"; exit 1; }
 
 # 1. เช็คพอร์ต 9222 ถ้าไม่เปิดก็รัน Chrome แล้วรอ 5 วินาที
 nc -z localhost 9222 > /dev/null 2>&1 || { /bin/bash start_chrome_for_script.sh & sleep 5; }
 
-# 2. รัน Python (ดึงข้อมูล + ส่งผลไป openclaw เอง ไม่ต้องเรียก openclaw ใน shell)
-/opt/homebrew/bin/python3 line_oa_unread_messages.py --url "https://chat.line.biz/Ua891055e09d7e52c08c29828d0f662f7" --connect-chrome 9222 --report-format summary-once --send-openclaw-target webchat
+# 2. รัน Python: รายงานข้อความที่ยังไม่อ่าน (รันครั้งเดียว ส่งผลไป openclaw)
+#    URL ใส่ใน .env เป็น LINE_OA_URL ก็ได้ แทนการ hardcode ด้านล่าง
+/opt/homebrew/bin/python3 line_oa_unread_messages.py --url "${LINE_OA_URL:-https://chat.line.biz/Ua891055e09d7e52c08c29828d0f662f7}" --connect-chrome 9222 --report-format summary-once --send-openclaw-target webchat

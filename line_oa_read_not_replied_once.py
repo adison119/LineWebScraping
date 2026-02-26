@@ -58,6 +58,8 @@ if __name__ == "__main__":
     parser.add_argument("--send-openclaw-target", type=str, default=openclaw_target, metavar="TARGET",
                         help="ส่งผลรายงานไป openclaw -t TARGET (หรือใช้ LINE_OA_OPENCLAW_TARGET ใน .env)")
     parser.add_argument("--debug", action="store_true", help="โหมด debug")
+    parser.add_argument("--for-test", action="store_true", dest="for_test",
+                        help="โหมดทดสอบ: เช็คเฉพาะแชทที่แสดง Yesterday")
     args = parser.parse_args()
 
     if not args.url:
@@ -72,4 +74,5 @@ if __name__ == "__main__":
         chrome_debug_port=args.connect_chrome,
         report_format="read-not-replied-today",
         send_openclaw_target=args.send_openclaw_target,
+        for_test=args.for_test,
     )
