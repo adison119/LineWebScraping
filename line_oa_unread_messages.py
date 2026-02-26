@@ -127,8 +127,11 @@ OUR_CHAT_HEADER_NAMES = [
 # หน้ารายละเอียดแชท: block แชทหนึ่งกลุ่ม และ chat-header > span (ชื่อผู้ส่ง)
 CHAT_BLOCK_CSS = "div.chat.chat-text-dark.chat-reverse.chat-success"
 # บล็อกแชททุกประเภท (เรา + ลูกค้า) เรียงตาม DOM = ตามเวลา ใช้หาข้อความตัวสุดท้าย
+# chat-reverse = ฟองเรา, chat-secondary = ฟองลูกค้า (ใช้เมื่อไม่มี chat-header)
 LAST_CHAT_BLOCK_CSS = "div.chat.chat-text-dark[class*='chat-reverse'], div.chat.chat-text-dark[class*='chat-secondary']"
 CHAT_HEADER_SPAN_XPATH = ".//div[contains(@class, 'chat-header')]//span"
+# บล็อกข้อความล่าสุด: -1 = ข้อความล่างสุด (DOM เก่าบน-ใหม่ล่าง), 0 = ข้อความบนสุด (DOM ใหม่บน)
+LAST_MESSAGE_BLOCK_INDEX = -1
 
 # รูปแบบเวลาวันนี้ (เช่น 17:27, 9:05); ถ้าไม่ตรง = แสดงเป็นข้อความเช่น เมื่อวาน
 TIME_TODAY_PATTERN = re.compile(r"^\s*\d{1,2}\s*:\s*\d{2}\s*$")
@@ -421,12 +424,10 @@ def _back_to_list(driver):
 def is_last_message_from_us(driver, our_names, wait_seconds=5):
     """
     ตรวจว่าข้อความล่าสุดในหน้านี้เป็นของเราหรือไม่
-    - ใช้บล็อกตัวสุดท้ายจริง (chronological): ทั้ง chat-reverse และ chat-secondary
-    - ไม่มี chat-header = แชท 1:1 ฝั่งลูกค้า → ไม่ใช่เรา
-    - มี chat-header → เทียบกับ OUR_CHAT_HEADER_NAMES เท่านั้น (ตรง = เรา, ไม่ตรง = ลูกค้าแชทกลุ่ม)
+    - ใช้บล็อกตัวสุดท้ายตาม LAST_MESSAGE_BLOCK_INDEX (chronological)
+    - มี chat-header → เทียบกับ OUR_CHAT_HEADER_NAMES (ตรง = เรา)
+    - ไม่มี chat-header → ดู class: chat-reverse = เรา, chat-secondary = ลูกค้า (ไม่ถือว่าตอบแล้ว)
     """
-    if not our_names:
-        return False
     try:
         wait = WebDriverWait(driver, wait_seconds)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)))
@@ -436,19 +437,24 @@ def is_last_message_from_us(driver, our_names, wait_seconds=5):
         blocks = driver.find_elements(By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)
         if not blocks:
             return False
-        last_block = blocks[-1]
+        last_block = blocks[LAST_MESSAGE_BLOCK_INDEX]
         span_els = last_block.find_elements(By.XPATH, CHAT_HEADER_SPAN_XPATH)
-        if not span_els:
-            return False  # ไม่มี chat-header = แชท 1:1 ฝั่งลูกค้า
-        header_text = (span_els[0].text or span_els[0].get_attribute("textContent") or "").strip()
-        header_text = " ".join(header_text.split())
-        for name in our_names:
-            if not name:
-                continue
-            name_norm = " ".join(name.strip().split())
-            if name_norm and (header_text == name_norm or name_norm in header_text):
-                return True
-        return False  # มี header แต่ไม่ตรงชื่อเรา = ลูกค้าแชทกลุ่ม
+        if span_els:
+            header_text = (span_els[0].text or span_els[0].get_attribute("textContent") or "").strip()
+            header_text = " ".join(header_text.split())
+            if our_names:
+                for name in our_names:
+                    if not name:
+                        continue
+                    name_norm = " ".join(name.strip().split())
+                    if name_norm and (header_text == name_norm or name_norm in header_text):
+                        return True
+            return False  # มี header แต่ไม่ตรงชื่อเรา = ลูกค้าแชทกลุ่ม
+        # ไม่มี chat-header: ดู class — ฟองเรา = chat-reverse, ฟองลูกค้า = chat-secondary
+        block_class = (last_block.get_attribute("class") or "").lower()
+        if "chat-reverse" in block_class:
+            return True
+        return False
     except Exception:
         return False
 
@@ -468,10 +474,11 @@ def get_read_not_replied_today(driver, our_names=None, wait_seconds=DEFAULT_WAIT
             print(f"[DEBUG] for_test: ตรวจเฉพาะ Yesterday เหลือ {len(rows)} รายการ")
     read_not_replied = []
     for row in rows:
-        # ถ้า preview แสดง "You sent a sticker." = เราส่งสติกเกอร์ไปแล้ว ถือว่าตอบแล้ว ข้าม (ไม่ต้องกดเข้าแชท)
-        if "You sent a sticker." in (row.get("message") or ""):
+        preview = (row.get("message") or "").strip()
+        # ถ้า preview บ่งชี้ว่าเราส่งข้อความ/สติกเกอร์/รูปไปแล้ว = ถือว่าตอบแล้ว ข้าม (ไม่ต้องกดเข้าแชท)
+        if preview.startswith("You sent ") or "You sent a sticker." in preview:
             if debug:
-                print(f"[DEBUG] ข้าม (เราส่งสติกเกอร์แล้ว): {row.get('sender')!r}")
+                print(f"[DEBUG] ข้าม (เราส่งไปแล้ว): {row.get('sender')!r} preview={preview[:50]!r}")
             continue
         try:
             _open_conversation(driver, row["element"])
