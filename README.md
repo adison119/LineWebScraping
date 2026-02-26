@@ -115,6 +115,8 @@ python line_oa_read_not_replied_once.py --connect-chrome 9222 --send-openclaw-ta
    `crontab -e`
 3. คัดลอกจาก `crontab.example` แล้วแก้ path `WORKSPACE` ให้ตรงกับเครื่องคุณ
 
+**ถ้า Cron รันแล้ว OpenClaw ไม่ส่งไป LINE** — อ่าน [CRON_OPENCLAW.md](CRON_OPENCLAW.md) (ตั้ง HOME/PATH ใน crontab และให้ OpenClaw Gateway รันอยู่)
+
 **Windows**
 
 ใช้ Task Scheduler ตั้งเวลาให้รัน `start_chrome_for_script.bat` (ถ้าต้องการให้ Chrome พร้อม) แล้วตั้ง task แยกให้รัน Python เช่น:

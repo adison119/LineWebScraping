@@ -15,6 +15,7 @@ import time
 import argparse
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -121,7 +122,7 @@ STRICT_UNREAD_ONLY = True
 # ชื่อที่ถือว่าเป็น "ของเรา" ใน chat-header (ข้อความล่าสุดจากชื่อเหล่านี้ = ตอบแล้ว)
 # แก้รายการด้านล่างได้เลย ไม่ต้องเก็บใน .env
 OUR_CHAT_HEADER_NAMES = [
-    "exa","exa","exa"
+    ". 𝒩𝒶𝓃’𝓃","merl","Bell","พอย","Ka Reem"
 ]
 
 # หน้ารายละเอียดแชท: block แชทหนึ่งกลุ่ม และ chat-header > span (ชื่อผู้ส่ง)
@@ -356,32 +357,83 @@ def _switch_to_line_oa_tab(driver, url):
     return False
 
 
+def _find_openclaw_cmd(openclaw_cmd=None):
+    """หา path ของ openclaw ให้ทำงานเมื่อรันจาก cron (PATH อาจไม่รวม openclaw)"""
+    if openclaw_cmd and os.path.isfile(openclaw_cmd):
+        return openclaw_cmd
+    for path in ("/opt/homebrew/bin/openclaw", "/usr/local/bin/openclaw"):
+        if os.path.isfile(path):
+            return path
+    # รันจาก cron มักมี PATH สั้น — เพิ่ม path ที่มักมี openclaw
+    extra_paths = os.pathsep.join([
+        os.environ.get("PATH", ""),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ])
+    env_path = os.environ.copy()
+    env_path["PATH"] = extra_paths
+    found = shutil.which("openclaw", path=extra_paths)
+    if found:
+        return found
+    return "openclaw"
+
+
 def send_via_openclaw(message, target="webchat", openclaw_cmd=None):
     """
     ส่งข้อความออกผ่าน openclaw (เรียก subprocess)
-    target = ค่าให้ -t/--target เช่น webchat
-    openclaw_cmd = path ของ openclaw (ถ้า None จะใช้ openclaw จาก PATH)
+    target = ค่าให้ -t/--target เช่น webchat (ส่งไปไลน์ต้องให้ OpenClaw Gateway รันอยู่และตั้งค่า channel ไว้)
+    openclaw_cmd = path ของ openclaw (ถ้า None จะหาจาก PATH / homebrew)
     """
     if not message or not message.strip():
         return False
-    cmd = openclaw_cmd or "openclaw"
-    if os.path.isfile(cmd):
-        pass
-    elif os.path.isfile("/opt/homebrew/bin/openclaw"):
-        cmd = "/opt/homebrew/bin/openclaw"
+    cmd = _find_openclaw_cmd(openclaw_cmd)
+    # ให้ subprocess มี PATH เพียงพอ (เมื่อรันจาก cron)
+    env = os.environ.copy()
+    env.setdefault("PATH", "")
+    for p in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if p not in env["PATH"]:
+            env["PATH"] = p + os.pathsep + env["PATH"]
     try:
         result = subprocess.run(
             [cmd, "message", "send", "-t", target, "--message", message.strip()],
             capture_output=True,
             text=True,
             timeout=30,
+            env=env,
         )
-        if result.returncode != 0 and result.stderr:
-            print(result.stderr, file=sys.stderr)
+        if result.returncode != 0:
+            if result.stderr:
+                print(result.stderr.strip(), file=sys.stderr)
+            if result.stdout:
+                print(result.stdout.strip(), file=sys.stderr)
+            print(f"[openclaw] returncode={result.returncode} target={target!r}", file=sys.stderr)
         return result.returncode == 0
+    except FileNotFoundError:
+        print(f"ไม่พบคำสั่ง openclaw (ลองติดตั้งหรือใส่ path ใน OPENCLAW_CMD) — ส่งผลไปไลน์ไม่สำเร็จ", file=sys.stderr)
+        return False
     except Exception as e:
         print(f"ส่ง openclaw ไม่สำเร็จ: {e}", file=sys.stderr)
         return False
+
+
+def _send_report_to_openclaw_targets(message, send_openclaw_target):
+    """
+    ส่งรายงานไปทุก target ที่กำหนด (รองรับหลายบัญชี)
+    send_openclaw_target = string คั่นด้วย comma เช่น "webchat,line_group_2" หรือ target เดียว "webchat"
+    """
+    if not message or not send_openclaw_target:
+        return
+    targets = [t.strip() for t in str(send_openclaw_target).split(",") if t.strip()]
+    if not targets:
+        return
+    ok = 0
+    for t in targets:
+        if send_via_openclaw(message, target=t):
+            ok += 1
+    if ok == len(targets):
+        print("(ส่งผลไป openclaw ทุก target แล้ว)", file=sys.stderr)
+    else:
+        print(f"(ส่ง openclaw สำเร็จ {ok}/{len(targets)} target)", file=sys.stderr)
 
 
 def _open_conversation(driver, row_element):
@@ -519,18 +571,18 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
         except ValueError:
             port_num = 9222
         if not _is_port_in_use(port_num):
-            print(f"Port {port} is not in use (no Chrome with remote debugging found).")
-            print("  -> Run start_chrome_for_script.bat first, then run this script again.")
+            print(f"Port {port} is not in use (no Chrome with remote debugging found).", file=sys.stderr)
+            print("  -> Run start_chrome_for_script.bat first, then run this script again.", file=sys.stderr)
             raise SystemExit(1)
-        print(f"Port {port} is in use. Connecting to Chrome...")
+        print(f"Port {port} is in use. Connecting to Chrome...", file=sys.stderr)
         try:
             driver = _connect_to_existing_chrome(port)
         except Exception:
-            print("Connection failed (not a Chrome instance started by the script?).")
-            print("  -> Run start_chrome_for_script.bat, log in to LINE OA, then run this script again.")
+            print("Connection failed (not a Chrome instance started by the script?).", file=sys.stderr)
+            print("  -> Run start_chrome_for_script.bat, log in to LINE OA, then run this script again.", file=sys.stderr)
             raise
         _switch_to_line_oa_tab(driver, url)
-        print("Connected to Chrome (using your existing LINE OA session).")
+        print("Connected to Chrome (using your existing LINE OA session).", file=sys.stderr)
     else:
         if not os.path.isdir(CHROME_USER_DATA_DIR):
             os.makedirs(CHROME_USER_DATA_DIR, exist_ok=True)
@@ -561,16 +613,16 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
             has_chat_list = False
         if not has_chat_list:
             if report_format in ("summary-once", "read-not-replied-today"):
-                print("❌ ยังไม่ได้เข้าสู่ระบบ LINE OA และคุณกำลังรันในโหมดอัตโนมัติ (Cron Job) กรุณาเข้าสู่ระบบในเบราว์เซอร์ด้วยตนเองก่อน")
+                print("❌ ยังไม่ได้เข้าสู่ระบบ LINE OA และคุณกำลังรันในโหมดอัตโนมัติ (Cron Job) กรุณาเข้าสู่ระบบในเบราว์เซอร์ด้วยตนเองก่อน", file=sys.stderr)
                 return  # จบการทำงานทันที ไม่รอ input เพื่อไม่ให้ cron job ค้าง
-            print("โปรดล็อกอินเข้าสู่ระบบ LINE OA ในเบราว์เซอร์ที่เปิดขึ้นมา")
+            print("โปรดล็อกอินเข้าสู่ระบบ LINE OA ในเบราว์เซอร์ที่เปิดขึ้นมา", file=sys.stderr)
             try:
                 input("เมื่อล็อกอินเสร็จแล้วและเห็นหน้าแชทแล้ว โปรดกด Enter เพื่อดำเนินการต่อ...")
             except EOFError:
-                print("⚠️ พบข้อผิดพลาดในการรับค่า Input (คาดว่ารันในเบื้องหลัง) กรุณาตรวจสอบการล็อกอิน")
+                print("⚠️ พบข้อผิดพลาดในการรับค่า Input (คาดว่ารันในเบื้องหลัง) กรุณาตรวจสอบการล็อกอิน", file=sys.stderr)
                 return
         else:
-            print("✅ เข้าสู่ระบบเรียบร้อยแล้ว")
+            print("✅ เข้าสู่ระบบเรียบร้อยแล้ว", file=sys.stderr)
 
     start_time = time.time()
     try:
@@ -591,10 +643,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
             report_text = "\n".join(lines)
             print(report_text)
             if send_openclaw_target:
-                if send_via_openclaw(report_text, target=send_openclaw_target):
-                    print("(ส่งผลไป openclaw แล้ว)", file=sys.stderr)
-                else:
-                    print("(ส่ง openclaw ไม่สำเร็จ)", file=sys.stderr)
+                _send_report_to_openclaw_targets(report_text, send_openclaw_target)
             return  # จบการทำงานหลังจากรายงาน
 
         # รายงานอ่านแล้วแต่ยังไม่ตอบของวันนี้ (one-shot)
@@ -617,10 +666,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
             report_text = "\n".join(lines)
             print(report_text)
             if send_openclaw_target:
-                if send_via_openclaw(report_text, target=send_openclaw_target):
-                    print("(ส่งผลไป openclaw แล้ว)", file=sys.stderr)
-                else:
-                    print("(ส่ง openclaw ไม่สำเร็จ)", file=sys.stderr)
+                _send_report_to_openclaw_targets(report_text, send_openclaw_target)
             return
 
         # โหมดรันต่อเนื่อง (สำหรับรันด้วยตนเอง)

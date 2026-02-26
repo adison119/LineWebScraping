@@ -1,5 +1,14 @@
 # LINE OA - ตัวอย่าง crontab
-# ใส่ใน crontab -e (แก้ WORKSPACE ให้ตรงกับเครื่องคุณ ถ้าไม่ใช้ ~/.openclaw/workspace/LineWebScraping)
+# ใส่ใน crontab -e แล้วแก้ค่าด้านล่างให้ตรงกับเครื่องคุณ
+#
+# สำคัญ: เพื่อให้ OpenClaw ส่งข้อความไป LINE ได้เมื่อรันจาก cron
+# 1) ต้องให้ OpenClaw Gateway รันอยู่ตลอด (เช่น รันเป็น service / launchd) — ดู CRON_OPENCLAW.md
+# 2) ต้องตั้ง HOME และ PATH ใน crontab ให้ตรงกับตอนรันด้วยมือ (เปิดเทอร์มินัลแล้ว echo $HOME และ echo $PATH)
+
+SHELL=/bin/bash
+# แก้เป็น home จริงของคุณ (เช่น /Users/yourname) — ใช้คำสั่ง echo $HOME ในเทอร์มินัลดู
+HOME=/Users/YOUR_USERNAME
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 
 WORKSPACE="${HOME}/.openclaw/workspace/LineWebScraping"
 
@@ -10,6 +19,7 @@ WORKSPACE="${HOME}/.openclaw/workspace/LineWebScraping"
 35 17 * * * /bin/bash "$WORKSPACE/run_read_not_replied_daily.sh" >> "$WORKSPACE/logs/read_not_replied.log" 2>&1
 
 # หมายเหตุ:
-# - สร้างโฟลเดอร์ logs: mkdir -p "$HOME/.openclaw/workspace/LineWebScraping/logs"
+# - สร้างโฟลเดอร์ logs: mkdir -p "$WORKSPACE/logs"
+# - .env ต้องมี LINE_OA_OPENCLAW_TARGET=webchat (หรือ target ที่ส่งไป LINE)
 # - Timezone ตามระบบ (ดู: date หรือ timedatectl)
-# - ถ้าใช้ Windows: ใช้ Task Scheduler ตั้งเวลาเรียก start_chrome_for_script.bat แล้วเรียก .bat ที่รัน Python แทน (หรือใช้ WSL แล้วใช้ cron ด้านบน)
+# - Windows: ใช้ Task Scheduler หรือ WSL+cron
