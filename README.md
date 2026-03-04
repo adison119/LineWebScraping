@@ -36,7 +36,7 @@ cp .env.example .env
 
 | ตัวแปร | ความหมาย |
 |--------|----------|
-| `LINE_OA_URL` | URL หน้าแชท LINE OA (เช่น https://chat.line.biz/...) |
+| `LINE_OA_URL` | URL หน้าแชท LINE OA (หนึ่ง URL หรือหลายห้องคั่นด้วย comma เช่น `https://chat.line.biz/xxx,https://chat.line.biz/yyy`) |
 | `LINE_OA_INTERVAL` | ช่วงตรวจสอบ (วินาที) เมื่อรันโหมดต่อเนื่อง — ค่าเริ่มต้น 30 |
 | `CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับสคริปต์ — ค่าเริ่มต้น 9222 |
 | `LINE_OA_OPENCLAW_TARGET` | (ถ้าต้องการ) ส่งผลรายงานไป OpenClaw ที่ target นี้ เช่น `webchat` |
@@ -73,6 +73,12 @@ start_chrome_for_script.bat
 
 ```bash
 python line_oa_unread_messages.py --url "https://chat.line.biz/..." --connect-chrome 9222 --report-format summary-once --send-openclaw-target webchat
+```
+
+**หลายห้องแชท** — ใส่หลาย URL คั่นด้วย comma ใน `--url` หรือใน `LINE_OA_URL`:
+
+```bash
+python line_oa_unread_messages.py --url "https://chat.line.biz/xxx,https://chat.line.biz/yyy" --connect-chrome 9222 --report-format summary-once
 ```
 
 ถ้าตั้ง `LINE_OA_URL` และ `CHROME_DEBUG_PORT` ใน `.env` แล้ว สามารถย่อเป็น:
