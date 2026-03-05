@@ -669,6 +669,28 @@ def _back_to_list(driver):
     time.sleep(0.5)
 
 
+def _reload_current_page_and_wait(driver, wait_seconds=DEFAULT_WAIT):
+    """
+    โหลดหน้าเว็บใหม่ (refresh) เพื่อป้องกันหน้าค้าง แล้วรอให้รายการแชทโหลด
+    ใช้ก่อนดึงข้อมูลทุกครั้ง เพื่อลดโอกาสหาข้อความไม่เจอ / ส่งข้อมูลไม่ได้
+    """
+    try:
+        driver.refresh()
+    except Exception:
+        try:
+            driver.get(driver.current_url or "")
+        except Exception:
+            pass
+    wait = WebDriverWait(driver, wait_seconds)
+    for conv_xpath, _n, _p, _t in CONVERSATION_SELECTORS:
+        try:
+            wait.until(EC.presence_of_element_located((By.XPATH, conv_xpath)))
+            break
+        except Exception:
+            continue
+    time.sleep(0.5)
+
+
 def is_last_message_from_us(driver, our_names, wait_seconds=5):
     """
     ตรวจว่าข้อความล่าสุดในหน้านี้เป็นของเราหรือไม่
@@ -809,46 +831,76 @@ def _parse_urls(url):
     return [u.strip() for u in s.split(",") if u.strip()]
 
 
-def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, debug=False, max_hours=None, chrome_debug_port=None, report_format="full", send_openclaw_target=None, for_test=False):
+def _parse_ports(port_string, default_port, count):
+    """
+    แปลง port_string เป็น list ของ port จำนวน count ตัว
+    ลิงก์แรกใช้ port แรก, ลิงก์ที่สองใช้ port ที่สอง ฯลฯ
+    ตัวอย่าง: "9222,9223" กับ count=3 → ["9222","9223","9223"] (ตัวสุดท้ายซ้ำ)
+    ถ้า port_string ว่าง ใช้ default_port ทั้งหมด
+    """
+    if count <= 0:
+        return []
+    s = (port_string or "").strip()
+    if not s:
+        return [default_port] * count
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if not parts:
+        return [default_port] * count
+    while len(parts) < count:
+        parts.append(parts[-1])
+    return parts[:count]
+
+
+def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, debug=False, max_hours=None, chrome_debug_port=None, chrome_debug_ports=None, report_format="full", send_openclaw_target=None, for_test=False):
     """
     รันตรวจสอบข้อความที่ยังไม่อ่านต่อเนื่อง
     url รับได้เป็น URL เดียว หรือหลาย URL คั่นด้วย comma (หลายห้องแชท)
     ถ้าใส่ chrome_debug_port (หรือ CHROME_DEBUG_PORT ใน .env) = ใช้ Chrome ที่เปิดอยู่แล้ว ไม่ต้องเปิดใหม่
+    chrome_debug_ports = รายการ port คั่น comma (หรือ LINE_OA_PORTS ใน .env): ลิงก์แรกใช้ port แรก, ลิงก์ที่สองใช้ port ที่สอง
     for_test: ใช้กับ report_format read-not-replied-today เท่านั้น — เช็คเฉพาะแชทที่แสดง Yesterday
     """
     urls = _parse_urls(url)
     if not urls:
         print("ไม่พบ URL กรุณาระบุ --url หรือ LINE_OA_URL (หลายห้องคั่นด้วย comma ได้)", file=sys.stderr)
         raise SystemExit(1)
-    # ใช้ URL แรกสำหรับการเชื่อมต่อ/เปิดหน้าแรก
+    # ลิงก์แรก–port แรก: สร้างรายการ (url, port) คู่กัน
+    port_src = (chrome_debug_ports or chrome_debug_port or "").strip()
+    default_port = (str(chrome_debug_port or "9222").strip().split(",")[0].strip() or "9222")
+    ports = _parse_ports(port_src, default_port, len(urls))
+    url_port_pairs = list(zip(urls, ports))
+    multi_port = len(set(ports)) > 1  # หลาย port = เปิดแต่ละลิงก์ใน Chrome คนละตัว
+
     first_url = urls[0]
+    first_port = ports[0]
     driver = None
-    use_existing = chrome_debug_port is not None and str(chrome_debug_port).strip() != ""
+    use_existing = port_src != ""
 
     if use_existing:
-        port = str(chrome_debug_port).strip()
         try:
-            port_num = int(port)
+            port_num = int(first_port)
         except ValueError:
             port_num = 9222
         if not _is_port_in_use(port_num):
-            print(f"Port {port} is not in use (no Chrome with remote debugging found).", file=sys.stderr)
+            print(f"Port {first_port} is not in use (no Chrome with remote debugging found).", file=sys.stderr)
             print("  -> Run start_chrome_for_script.bat first, then run this script again.", file=sys.stderr)
             raise SystemExit(1)
-        print(f"Port {port} is in use. Connecting to Chrome...", file=sys.stderr)
-        try:
-            driver = _connect_to_existing_chrome(port)
-        except Exception:
-            print("Connection failed (not a Chrome instance started by the script?).", file=sys.stderr)
-            print("  -> Run start_chrome_for_script.bat, log in to LINE OA, then run this script again.", file=sys.stderr)
-            raise
-        if len(urls) == 1:
-            _switch_to_line_oa_tab(driver, first_url)
+        if not multi_port:
+            print(f"Port {first_port} is in use. Connecting to Chrome...", file=sys.stderr)
+            try:
+                driver = _connect_to_existing_chrome(first_port)
+            except Exception:
+                print("Connection failed (not a Chrome instance started by the script?).", file=sys.stderr)
+                print("  -> Run start_chrome_for_script.bat, log in to LINE OA, then run this script again.", file=sys.stderr)
+                raise
+            if len(urls) == 1:
+                _switch_to_line_oa_tab(driver, first_url)
+            else:
+                _ensure_tab_for_url(driver, first_url)
+            print("Connected to Chrome (using your existing LINE OA session).", file=sys.stderr)
+            if len(urls) > 1:
+                print(f"รองรับ {len(urls)} ห้องแชท", file=sys.stderr)
         else:
-            _ensure_tab_for_url(driver, first_url)
-        print("Connected to Chrome (using your existing LINE OA session).", file=sys.stderr)
-        if len(urls) > 1:
-            print(f"รองรับ {len(urls)} ห้องแชท", file=sys.stderr)
+            print(f"โหมดหลายบัญชี: ลิงก์ที่ 1→port {ports[0]}, ลิงก์ที่ 2→port {ports[1]} ฯลฯ", file=sys.stderr)
     else:
         if not os.path.isdir(CHROME_USER_DATA_DIR):
             os.makedirs(CHROME_USER_DATA_DIR, exist_ok=True)
@@ -892,49 +944,94 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
 
     start_time = time.time()
     try:
+        # หลายบัญชี + ไม่ได้ระบุโหมด = ใช้ summary-once (รันครั้งเดียว) อัตโนมัติ
+        if multi_port and report_format == "full":
+            report_format = "summary-once"
+            print("หลายบัญชี: ใช้โหมดรายงานครั้งเดียว (summary-once)", file=sys.stderr)
 
-        if debug:
+        if driver and debug:
             debug_page_structure(driver, wait_seconds=5)
-        
+
         # ถ้ารันแบบ One-shot เพื่อรายงานสรุป (สำหรับ cron job) — แยกวันนี้/เมื่อวาน (ไม่เอาเก่ากว่าเมื่อวาน)
         if report_format == "summary-once":
             lines = []
             grand_total = 0
-            for i, one_url in enumerate(urls):
-                if len(urls) > 1:
-                    if use_existing:
-                        _ensure_tab_for_url(driver, one_url)
-                    else:
-                        driver.get(one_url)
-                    time.sleep(0.8)
-                room = _room_label_from_url(one_url, i)
-                current_unread_messages = get_unread_messages(driver, wait_seconds=5, debug=debug)
-                unread_today = [m for m in current_unread_messages if _is_time_today(m.get("time") or "")]
-                unread_yesterday = [m for m in current_unread_messages if _is_time_yesterday(m.get("time") or "")]
-                total_today_yesterday = len(unread_today) + len(unread_yesterday)
-                grand_total += total_today_yesterday
-                if len(urls) > 1:
-                    lines.append(f"【{room}】")
-                if total_today_yesterday:
-                    if unread_today:
-                        lines.append(f"📥 ยังไม่อ่าน วันนี้ [รวม {len(unread_today)} รายการ]")
-                        for msg in unread_today:
-                            lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']} น.**")
+            if multi_port:
+                # แต่ละลิงก์เปิดใน port ของตัวเอง: เชื่อมต่อทีละคู่ (url, port)
+                for i, (one_url, port) in enumerate(url_port_pairs):
+                    try:
+                        d = _connect_to_existing_chrome(port)
+                        d.get(one_url)
+                        time.sleep(0.8)
+                        _reload_current_page_and_wait(d, wait_seconds=5)
+                        room = _room_label_from_url(one_url, i)
+                        current_unread_messages = get_unread_messages(d, wait_seconds=5, debug=debug)
+                        unread_today = [m for m in current_unread_messages if _is_time_today(m.get("time") or "")]
+                        unread_yesterday = [m for m in current_unread_messages if _is_time_yesterday(m.get("time") or "")]
+                        total_today_yesterday = len(unread_today) + len(unread_yesterday)
+                        grand_total += total_today_yesterday
+                        lines.append(f"【{room}】")
+                        if total_today_yesterday:
+                            if unread_today:
+                                lines.append(f"📥 ยังไม่อ่าน วันนี้ [รวม {len(unread_today)} รายการ]")
+                                for msg in unread_today:
+                                    lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']} น.**")
+                                lines.append("")
+                            if unread_yesterday:
+                                lines.append(f"📥 ยังไม่อ่าน เมื่อวาน [รวม {len(unread_yesterday)} รายการ]")
+                                for msg in unread_yesterday:
+                                    lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']}**")
+                                lines.append("")
+                            lines.append(f"--- {room}: ยังไม่อ่านรวม {total_today_yesterday} รายการ ---")
+                            lines.append("")
+                        else:
+                            lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
+                        d.quit()
+                    except Exception as e:
+                        if debug:
+                            print(f"[DEBUG] summary-once ที่ port {port}: {e}", file=sys.stderr)
+                        lines.append(f"【{_room_label_from_url(one_url, i)}】")
+                        lines.append(f"(ผิดพลาด: {e})")
                         lines.append("")
-                    if unread_yesterday:
-                        lines.append(f"📥 ยังไม่อ่าน เมื่อวาน [รวม {len(unread_yesterday)} รายการ]")
-                        for msg in unread_yesterday:
-                            lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']}**")
-                        lines.append("")
-                    if len(urls) > 1:
-                        lines.append(f"--- {room}: ยังไม่อ่านรวม {total_today_yesterday} รายการ ---")
-                        lines.append("")
-                elif len(urls) == 1:
-                    lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
-            if len(urls) > 1:
                 lines.append(f"--- สรุปทุกห้อง: ยังไม่อ่านรวม {grand_total} รายการ (วันนี้+เมื่อวาน) ---")
-            elif grand_total == 0 and urls:
-                lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
+            else:
+                for i, one_url in enumerate(urls):
+                    if len(urls) > 1:
+                        if use_existing and driver:
+                            _ensure_tab_for_url(driver, one_url)
+                        elif driver:
+                            driver.get(one_url)
+                        time.sleep(0.8)
+                    if driver:
+                        _reload_current_page_and_wait(driver, wait_seconds=5)
+                    room = _room_label_from_url(one_url, i)
+                    current_unread_messages = get_unread_messages(driver, wait_seconds=5, debug=debug)
+                    unread_today = [m for m in current_unread_messages if _is_time_today(m.get("time") or "")]
+                    unread_yesterday = [m for m in current_unread_messages if _is_time_yesterday(m.get("time") or "")]
+                    total_today_yesterday = len(unread_today) + len(unread_yesterday)
+                    grand_total += total_today_yesterday
+                    if len(urls) > 1:
+                        lines.append(f"【{room}】")
+                    if total_today_yesterday:
+                        if unread_today:
+                            lines.append(f"📥 ยังไม่อ่าน วันนี้ [รวม {len(unread_today)} รายการ]")
+                            for msg in unread_today:
+                                lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']} น.**")
+                            lines.append("")
+                        if unread_yesterday:
+                            lines.append(f"📥 ยังไม่อ่าน เมื่อวาน [รวม {len(unread_yesterday)} รายการ]")
+                            for msg in unread_yesterday:
+                                lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']}**")
+                            lines.append("")
+                        if len(urls) > 1:
+                            lines.append(f"--- {room}: ยังไม่อ่านรวม {total_today_yesterday} รายการ ---")
+                            lines.append("")
+                    elif len(urls) == 1:
+                        lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
+                if len(urls) > 1:
+                    lines.append(f"--- สรุปทุกห้อง: ยังไม่อ่านรวม {grand_total} รายการ (วันนี้+เมื่อวาน) ---")
+                elif grand_total == 0 and urls:
+                    lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
             report_text = "\n".join(lines)
             print(report_text)
             if send_openclaw_target:
@@ -947,51 +1044,98 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                 print("[For test] ตรวจเฉพาะแชทที่แสดง Yesterday", file=sys.stderr)
             lines = []
             grand_total = 0
-            for i, one_url in enumerate(urls):
+            if multi_port:
+                for i, (one_url, port) in enumerate(url_port_pairs):
+                    try:
+                        d = _connect_to_existing_chrome(port)
+                        d.get(one_url)
+                        time.sleep(0.8)
+                        _reload_current_page_and_wait(d, wait_seconds=5)
+                        room = _room_label_from_url(one_url, i)
+                        read_not_replied_today, read_not_replied_yesterday = get_read_not_replied_today_and_yesterday(d, wait_seconds=5, debug=debug)
+                        if for_test:
+                            read_not_replied_today = []
+                        total = len(read_not_replied_today) + len(read_not_replied_yesterday)
+                        grand_total += total
+                        lines.append(f"【{room}】")
+                        if read_not_replied_today:
+                            lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ วันนี้ [รวม {len(read_not_replied_today)} รายการ]")
+                            for msg in read_not_replied_today:
+                                lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
+                            lines.append("")
+                        if read_not_replied_yesterday:
+                            lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ เมื่อวาน [รวม {len(read_not_replied_yesterday)} รายการ]")
+                            for msg in read_not_replied_yesterday:
+                                lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
+                            lines.append("")
+                        if total:
+                            lines.append(f"--- {room}: อ่านแล้วแต่ยังไม่ตอบ รวม {total} รายการ ---")
+                            lines.append("")
+                        else:
+                            lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
+                            lines.append("")
+                        d.quit()
+                    except Exception as e:
+                        if debug:
+                            print(f"[DEBUG] read-not-replied ที่ port {port}: {e}", file=sys.stderr)
+                        lines.append(f"【{_room_label_from_url(one_url, i)}】")
+                        lines.append(f"(ผิดพลาด: {e})")
+                        lines.append("")
+                lines.append(f"--- สรุปทุกห้อง: อ่านแล้วแต่ยังไม่ตอบ รวม {grand_total} รายการ ---")
+            else:
+                for i, one_url in enumerate(urls):
+                    if len(urls) > 1 and driver:
+                        if use_existing:
+                            _ensure_tab_for_url(driver, one_url)
+                        else:
+                            driver.get(one_url)
+                        time.sleep(0.8)
+                    if driver:
+                        _reload_current_page_and_wait(driver, wait_seconds=5)
+                    room = _room_label_from_url(one_url, i)
+                    read_not_replied_today, read_not_replied_yesterday = get_read_not_replied_today_and_yesterday(driver, wait_seconds=5, debug=debug)
+                    if for_test:
+                        read_not_replied_today = []
+                    total = len(read_not_replied_today) + len(read_not_replied_yesterday)
+                    grand_total += total
+                    if len(urls) > 1:
+                        lines.append(f"【{room}】")
+                    if read_not_replied_today:
+                        lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ วันนี้ [รวม {len(read_not_replied_today)} รายการ]")
+                        for msg in read_not_replied_today:
+                            lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
+                        lines.append("")
+                    if read_not_replied_yesterday:
+                        lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ เมื่อวาน [รวม {len(read_not_replied_yesterday)} รายการ]")
+                        for msg in read_not_replied_yesterday:
+                            lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
+                        lines.append("")
+                    if total and len(urls) > 1:
+                        lines.append(f"--- {room}: อ่านแล้วแต่ยังไม่ตอบ รวม {total} รายการ ---")
+                        lines.append("")
+                    elif not total and len(urls) == 1:
+                        lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
+                        lines.append("")
+                        lines.append("--- สรุป: อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
                 if len(urls) > 1:
-                    if use_existing:
-                        _ensure_tab_for_url(driver, one_url)
-                    else:
-                        driver.get(one_url)
-                    time.sleep(0.8)
-                room = _room_label_from_url(one_url, i)
-                read_not_replied_today, read_not_replied_yesterday = get_read_not_replied_today_and_yesterday(driver, wait_seconds=5, debug=debug)
-                if for_test:
-                    read_not_replied_today = []
-                total = len(read_not_replied_today) + len(read_not_replied_yesterday)
-                grand_total += total
-                if len(urls) > 1:
-                    lines.append(f"【{room}】")
-                if read_not_replied_today:
-                    lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ วันนี้ [รวม {len(read_not_replied_today)} รายการ]")
-                    for msg in read_not_replied_today:
-                        lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
-                    lines.append("")
-                if read_not_replied_yesterday:
-                    lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ เมื่อวาน [รวม {len(read_not_replied_yesterday)} รายการ]")
-                    for msg in read_not_replied_yesterday:
-                        lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
-                    lines.append("")
-                if total and len(urls) > 1:
-                    lines.append(f"--- {room}: อ่านแล้วแต่ยังไม่ตอบ รวม {total} รายการ ---")
-                    lines.append("")
-                elif not total and len(urls) == 1:
+                    lines.append(f"--- สรุปทุกห้อง: อ่านแล้วแต่ยังไม่ตอบ รวม {grand_total} รายการ ---")
+                elif len(urls) == 1 and grand_total == 0 and not lines:
                     lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
                     lines.append("")
                     lines.append("--- สรุป: อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
-            if len(urls) > 1:
-                lines.append(f"--- สรุปทุกห้อง: อ่านแล้วแต่ยังไม่ตอบ รวม {grand_total} รายการ ---")
-            elif len(urls) == 1 and grand_total == 0 and not lines:
-                lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
-                lines.append("")
-                lines.append("--- สรุป: อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
             report_text = "\n".join(lines)
             print(report_text)
             if send_openclaw_target:
                 _send_report_to_openclaw_targets(report_text, send_openclaw_target)
             return
 
-        # โหมดรันต่อเนื่อง (สำหรับรันด้วยตนเอง)
+        # โหมดรันต่อเนื่อง (สำหรับรันด้วยตนเอง) — ไม่รองรับหลาย port (ใช้ port เดียวหลายแท็บ)
+        if multi_port:
+            print("โหมดรันต่อเนื่อง (full) ไม่รองรับหลาย port — กรุณาใช้ port เดียวหรือรันแยกตามบัญชี", file=sys.stderr)
+            return
+        if not driver:
+            print("ไม่สามารถเริ่มโหมดรันต่อเนื่องได้ (ไม่มี Chrome)", file=sys.stderr)
+            return
         print(f"เริ่มตรวจสอบข้อความที่ยังไม่อ่านทุกๆ {check_interval_seconds} วินาที...")
         if len(urls) > 1:
             print(f"จำนวนห้องแชท: {len(urls)}")
@@ -1010,6 +1154,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                         else:
                             driver.get(one_url)
                         time.sleep(0.5)
+                    _reload_current_page_and_wait(driver, wait_seconds=5)
                     room = _room_label_from_url(one_url, i)
                     current_unread_messages = get_unread_messages(driver, wait_seconds=5, debug=debug)
                     if current_unread_messages:
@@ -1034,7 +1179,8 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
     except Exception as e:
         print(f"เกิดข้อผิดพลาด: {e}")
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
 
 
 if __name__ == "__main__":
@@ -1044,16 +1190,19 @@ if __name__ == "__main__":
     except ValueError:
         default_interval = 30
     chrome_port = os.environ.get("CHROME_DEBUG_PORT", "").strip()
+    line_oa_ports = (os.environ.get("LINE_OA_PORTS", "") or "").strip() or None
+    default_openclaw = (os.environ.get("LINE_OA_OPENCLAW_TARGET", "") or "").strip() or None
     parser = argparse.ArgumentParser(description="LINE OA - ตรวจสอบข้อความที่ยังไม่อ่าน")
     parser.add_argument("--url", default=default_url, help="URL หน้าแชท LINE OA (หลายห้องคั่นด้วย comma ได้)")
     parser.add_argument("--interval", type=int, default=default_interval, help="ระยะห่างตรวจสอบ วินาที")
     parser.add_argument("--debug", action="store_true", help="โหมด debug")
     parser.add_argument("--max-hours", type=float, default=None, help="หยุดหลังรันครบ N ชม.")
-    parser.add_argument("--connect-chrome", type=str, default=chrome_port or None, metavar="PORT", help="เชื่อมต่อกับ Chrome ที่เปิดอยู่แล้ว (port 9222 ถ้าใช้ start_chrome_for_script.bat)")
+    parser.add_argument("--connect-chrome", type=str, default=chrome_port or None, metavar="PORT", help="เชื่อมต่อกับ Chrome (port เดียว หรือหลาย port คั่น comma: ลิงก์แรกใช้ port แรก)")
+    parser.add_argument("--ports", type=str, default=line_oa_ports, metavar="PORTS", help="รายการ port คั่น comma สอดคล้องกับ --url (หรือใช้ LINE_OA_PORTS ใน .env)")
     parser.add_argument("--report-format", type=str, choices=["full", "summary-once", "read-not-replied-today"], default="full",
                         help="รูปแบบการรายงาน: full (ข้อความเต็ม), summary-once (ชื่อและเวลา, รันครั้งเดียว), read-not-replied-today (อ่านแล้วยังไม่ตอบของวันนี้)")
-    parser.add_argument("--send-openclaw-target", type=str, default=None, metavar="TARGET",
-                        help="ส่งผลรายงานไป openclaw -t TARGET (ใช้คู่กับ summary-once หรือ read-not-replied-today)")
+    parser.add_argument("--send-openclaw-target", type=str, default=default_openclaw, metavar="TARGET",
+                        help="ส่งผลรายงานไป openclaw -t TARGET (หรือใช้ LINE_OA_OPENCLAW_TARGET ใน .env)")
     parser.add_argument("--for-test", action="store_true", dest="for_test",
                         help="โหมดทดสอบ: ใช้กับ read-not-replied-today — เช็คเฉพาะแชทที่แสดง Yesterday")
     args = parser.parse_args()
@@ -1064,6 +1213,7 @@ if __name__ == "__main__":
         debug=args.debug,
         max_hours=args.max_hours,
         chrome_debug_port=args.connect_chrome,
+        chrome_debug_ports=args.ports,
         report_format=args.report_format,
         send_openclaw_target=args.send_openclaw_target,
         for_test=args.for_test,

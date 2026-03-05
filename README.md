@@ -12,7 +12,7 @@
 ## ความต้องการของระบบ
 
 - **Python 3** (ใช้กับ Selenium + webdriver-manager)
-- **Google Chrome** (ให้สคริปต์เปิดหรือเชื่อมต่อที่ port 9222)
+- **Google Chrome** (ให้สคริปต์เปิดหรือเชื่อมต่อที่ port 9222; หลายบัญชีใช้หลาย port ได้)
 - ไฟล์ **`.env`** สำหรับ URL และค่าต่างๆ (ดู `.env.example`)
 
 ---
@@ -37,8 +37,9 @@ cp .env.example .env
 | ตัวแปร | ความหมาย |
 |--------|----------|
 | `LINE_OA_URL` | URL หน้าแชท LINE OA (หนึ่ง URL หรือหลายห้องคั่นด้วย comma เช่น `https://chat.line.biz/xxx,https://chat.line.biz/yyy`) |
+| `LINE_OA_PORTS` | (หลายบัญชี) รายการ port คั่น comma สอดคล้องกับ URL — **ลิงก์แรกใช้ port แรก**, ลิงก์ที่สองใช้ port ที่สอง (เช่น `9222,9223`) |
 | `LINE_OA_INTERVAL` | ช่วงตรวจสอบ (วินาที) เมื่อรันโหมดต่อเนื่อง — ค่าเริ่มต้น 30 |
-| `CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับสคริปต์ — ค่าเริ่มต้น 9222 |
+| `CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับสคริปต์ (บัญชีเดียวหรือค่าเริ่มต้น) — ค่าเริ่มต้น 9222 |
 | `LINE_OA_OPENCLAW_TARGET` | (ถ้าต้องการ) ส่งผลรายงานไป OpenClaw ที่ target นี้ เช่น `webchat` |
 
 ชื่อที่ถือว่าเป็น "ของเรา" ในแชท (สำหรับโหมดอ่านแล้วแต่ยังไม่ตอบ) ตั้งใน `line_oa_unread_messages.py` ที่ตัวแปร **`OUR_CHAT_HEADER_NAMES`** (เป็น list ของ string).
@@ -49,19 +50,43 @@ cp .env.example .env
 
 ### 1. เปิด Chrome สำหรับสคริปต์ (ทำก่อนรัน Python)
 
-**Windows**
+**รันครั้งเดียว เปิดตาม .env (แนะนำหลายบัญชี)**
 
+สคริปต์จะอ่าน **LINE_OA_PORTS** หรือ **CHROME_DEBUG_PORT** จาก `.env` แล้วเปิด Chrome ตามจำนวน port ที่กำหนด (ลิงก์แรกใช้ port แรก ฯลฯ)
+
+| บัญชี | Port | โปรไฟล์โฟลเดอร์ |
+|-------|------|------------------|
+| ที่ 1 | 9222 | `chrome_debug_profile` |
+| ที่ 2 | 9223 | `chrome_debug_profile_2` |
+| ที่ 3 | 9224 | `chrome_debug_profile_3` |
+
+**ใน `.env` ตั้งเช่น**
+```env
+LINE_OA_PORTS=9222,9223
+```
+หรือ
+```env
+CHROME_DEBUG_PORT=9222,9223
+```
+
+**Windows**
 ```cmd
 start_chrome_for_script.bat
 ```
 
-จากนั้นล็อกอิน LINE OA ใน Chrome ที่เปิดขึ้นมา แล้วค่อยรันสคริปต์ด้านล่าง
-
 **Mac/Linux**
-
 ```bash
 ./start_chrome_for_script.sh
 ```
+
+จะเปิด Chrome 2 ตัว (port 9222 และ 9223) ให้ จากนั้นล็อกอิน LINE OA ในแต่ละหน้าต่าง แล้วรัน `python line_oa_unread_messages.py --report-format summary-once` (ใช้ค่า LINE_OA_URL / LINE_OA_PORTS จาก .env)
+
+**เปิดแค่บัญชีเดียวหรือเปิดแค่ slot ที่ต้องการ**
+
+- ไม่มี `.env` หรือมีแค่ `CHROME_DEBUG_PORT=9222` = เปิดแค่ 1 ตัว (port 9222)
+- ส่ง argument ตัวเลข = เปิดแค่ slot นั้น: `start_chrome_for_script.bat 2` หรือ `./start_chrome_for_script.sh 2` → เปิดแค่ port 9223
+
+**กำหนดลิงก์กับ port คู่กัน (ลิงก์แรก–port แรก):** ใส่ `LINE_OA_URL=url1,url2` และ `LINE_OA_PORTS=9222,9223` ใน `.env` (หรือ `--url` กับ `--ports`) สคริปต์ Python จะเปิด url1 ใน Chrome ที่ port 9222 และ url2 ใน port 9223 ให้อัตโนมัติ (โหมด summary-once / read-not-replied-today เท่านั้น)
 
 (ถ้าใช้ cron สคริปต์ `run_line_oa_job.sh` / `run_read_not_replied_daily.sh` จะเช็คพอร์ต 9222 แล้วรัน Chrome ให้เองถ้ายังไม่เปิด)
 
@@ -142,7 +167,8 @@ python line_oa_read_not_replied_once.py --connect-chrome 9222 --send-openclaw-ta
 | `line_oa_read_not_replied_once.py` | เรียกโหมด "อ่านแล้วแต่ยังไม่ตอบของวันนี้" รันครั้งเดียว (สำหรับ cron) |
 | `run_line_oa_job.sh` | Wrapper: เปิด Chrome ถ้ายังไม่มี แล้วรันรายงานยังไม่อ่าน (summary-once) |
 | `run_read_not_replied_daily.sh` | Wrapper: เปิด Chrome ถ้ายังไม่มี แล้วรันอ่านแล้วยังไม่ตอบรายวัน |
-| `start_chrome_for_script.bat` / `.sh` | เปิด Chrome ที่ port 9222 สำหรับให้สคริปต์เชื่อมต่อ |
+| `start_chrome_for_script.bat` / `.sh` | เปิด Chrome ที่ port 9222 (หรือ 9223, 9224 ถ้ารันด้วย argument 2, 3) สำหรับให้สคริปต์เชื่อมต่อ |
+| `close_chrome_port_9222.py` / `.bat` / `.sh` | ปิด Chrome ที่ใช้ port ที่กำหนด (default 9222; ใช้ `--port` หรือ `--all` สำหรับหลายบัญชี) |
 | `crontab.example` | ตัวอย่าง crontab สำหรับรันทั้งสองงานตามเวลา |
 | `.env.example` | ตัวอย่าง config — copy เป็น `.env` แล้วแก้ค่า (อย่า commit `.env`) |
 | `requirements.txt` | Python dependencies (selenium, webdriver-manager) |
@@ -152,7 +178,8 @@ python line_oa_read_not_replied_once.py --connect-chrome 9222 --send-openclaw-ta
 ## แก้ปัญหา
 
 - **Selector ไม่ตรงกับหน้าเว็บ** — รันด้วย `--debug` แล้วดู HTML/class ที่พิมพ์ออกมา จากนั้นแก้ `CONVERSATION_SELECTORS` / XPath ใน `line_oa_unread_messages.py`
-- **Chrome ไม่เจอหรือ port ถูกใช้** — ตรวจ path Chrome ใน `start_chrome_for_script.bat` หรือ `.sh` และตรวจว่าไม่มีโปรแกรมอื่นใช้พอร์ต 9222
+- **Chrome ไม่เจอหรือ port ถูกใช้** — ตรวจ path Chrome ใน `start_chrome_for_script.bat` หรือ `.sh` และตรวจว่าไม่มีโปรแกรมอื่นใช้พอร์ตนั้น (9222, 9223, …)
+- **หลายบัญชี LINE** — เปิด Chrome แยกตัวต่อบัญชี (ใช้ argument ตัวเลขใน start_chrome เช่น `start_chrome_for_script.bat 2`) แล้วรันสคริปต์ด้วย `--connect-chrome <port>` ให้ตรงกับแต่ละบัญชี
 - **ล็อกอิน LINE OA** — ต้องล็อกอินใน Chrome ที่สคริปต์ใช้ (ตัวที่เปิดด้วย `start_chrome_for_script`) ครั้งแรก หลังจากนั้น profile จะถูกจำ
 
 ---
