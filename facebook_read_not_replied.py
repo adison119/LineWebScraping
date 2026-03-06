@@ -37,14 +37,14 @@ from facebook_unread_messages import (
 
 
 def main():
-    # อ่านพอร์ตและส่งค่าให้ scrape_facebook_inbox แบบเดียวกับ facebook_unread_messages ทุกประการ
     chrome_port = (
         (os.environ.get("FB_CHROME_DEBUG_PORT") or os.environ.get("CHROME_DEBUG_PORT") or "").strip() or None
     )
     openclaw_target = (os.environ.get("LINE_OA_OPENCLAW_TARGET") or "").strip() or None
+    fb_inbox_urls = (os.environ.get("FB_INBOX_URL") or "").strip() or None
 
     parser = argparse.ArgumentParser(
-        description="Facebook Inbox - รายงาน อ่านแล้วแต่ยังไม่ตอบ (เชื่อมต่อ Chrome ที่เปิดหน้า Inbox ไว้ก่อน)"
+        description="Facebook Inbox - รายงาน อ่านแล้วแต่ยังไม่ตอบ (สร้างแท็บใหม่สำหรับแต่ละ URL)"
     )
     parser.add_argument(
         "--connect-chrome",
@@ -52,6 +52,13 @@ def main():
         default=chrome_port,
         metavar="PORT",
         help="เชื่อมต่อกับ Chrome ที่เปิดอยู่แล้ว (ใช้ FB_CHROME_DEBUG_PORT ใน .env)",
+    )
+    parser.add_argument(
+        "--urls",
+        type=str,
+        default=fb_inbox_urls,
+        metavar="URLS",
+        help="URL ของ FB Inbox คั่นด้วย comma (หรือใช้ FB_INBOX_URL ใน .env)",
     )
     parser.add_argument(
         "--today-only",
@@ -80,9 +87,8 @@ def main():
     parser.add_argument("--debug", action="store_true", help="โหมด debug")
     args = parser.parse_args()
 
-    # ส่งพอร์ตตรงจาก args เหมือน facebook_unread_messages (chrome_debug_port=args.connect_chrome)
     scrape_facebook_inbox(
-        url=None,
+        urls=args.urls,
         report_format="read-not-replied-today",
         chrome_debug_port=args.connect_chrome,
         send_openclaw_target=args.send_openclaw_target,

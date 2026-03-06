@@ -11,15 +11,9 @@ import time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from fb_connect_chrome import connect_chrome
-from fb_open_tab import switch_to_first_tab
-from fb_get_threads import (
-    get_facebook_threads,
-    scroll_inbox_to_top,
-    scroll_down_until_date_then_back_to_top,
-    debug_page_structure,
-    DEFAULT_WAIT,
-    WITHIN_DAYS_DEFAULT,
-)
+from fb_open_tab import open_new_tab, close_current_tab
+from fb_get_threads import debug_page_structure, DEFAULT_WAIT, WITHIN_DAYS_DEFAULT
+from fb_scroll_load import scroll_load_threads
 from fb_report import build_report
 from fb_openclaw import send_report_to_openclaw
 
@@ -49,13 +43,46 @@ def _load_dotenv():
             continue
 
 
-def scrape_facebook_inbox(url=None, report_format="summary-once", chrome_debug_port=None,
+def _scrape_one_url(driver, url, report_format, unread_only, within_days,
+                    within_today_only, scroll_to_load_week, debug):
+    """
+    สร้างแท็บใหม่ → โหลด URL → เลื่อนโหลดข้อมูล → ตรวจสอบ 2 ครั้ง → ปิดแท็บ → คืน threads
+    """
+    open_new_tab(driver, url, debug=debug)
+
+    if debug:
+        print(f"[DEBUG] หน้าปัจจุบัน: {driver.current_url or '(ไม่มี URL)'}", file=sys.stderr)
+        debug_page_structure(driver, wait_seconds=DEFAULT_WAIT)
+
+    read_not_replied = report_format == "read-not-replied-today"
+
+    threads = scroll_load_threads(
+        driver,
+        unread_only=unread_only,
+        read_not_replied_only=read_not_replied,
+        within_days=within_days,
+        within_today_only=within_today_only,
+        scroll_to_load_week=scroll_to_load_week,
+        debug=debug,
+    )
+
+    close_current_tab(driver, debug=debug)
+    return threads
+
+
+def scrape_facebook_inbox(urls=None, report_format="summary-once", chrome_debug_port=None,
                           send_openclaw_target=None, unread_only=True, within_days=WITHIN_DAYS_DEFAULT,
                           within_today_only=False, scroll_to_load_week=True, debug=False):
     """
-    เชื่อมต่อ Chrome → สลับแท็บแรก → ดึงรายการแชท → สร้างรายงาน → พิมพ์และส่ง openclaw
-    ไม่เปิด/โหลด URL — ต้องเปิดหน้า FB Inbox ไว้ก่อนแล้ว
+    เชื่อมต่อ Chrome → สร้างแท็บใหม่สำหรับแต่ละ URL → สแกน → ปิดแท็บ → รายงานรวม
+    urls: list ของ URL หรือ string คั่นด้วย comma
     """
+    if isinstance(urls, str):
+        urls = [u.strip() for u in urls.split(",") if u.strip()]
+    if not urls:
+        print("ไม่มี URL ให้ทำงาน — กรุณาตั้ง FB_INBOX_URL ใน .env", file=sys.stderr)
+        raise SystemExit(1)
+
     driver = None
     driver_owned = None
 
@@ -67,45 +94,22 @@ def scrape_facebook_inbox(url=None, report_format="summary-once", chrome_debug_p
             n_tabs = len(driver.window_handles) if getattr(driver, "window_handles", None) else 0
             print(f"[DEBUG] เชื่อม Chrome สำเร็จ — จำนวนแท็บ: {n_tabs}", file=sys.stderr)
 
-        first_tab_url = switch_to_first_tab(driver, debug=debug)
-        print(f"รีเฟรชหน้า: {first_tab_url or driver.current_url or '(ไม่มี URL)'}", file=sys.stderr)
-        driver.refresh()
-        time.sleep(2)
-        if debug:
-            print("[DEBUG] รีเฟรชแล้ว รอ 2 วินาที", file=sys.stderr)
-            print(f"[DEBUG] หน้าปัจจุบันหลังรีเฟรช: {driver.current_url or '(ไม่มี URL)'}", file=sys.stderr)
-            debug_page_structure(driver, wait_seconds=DEFAULT_WAIT)
+        all_threads = []
+        for i, url in enumerate(urls):
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"ลิงก์ที่ {i+1}/{len(urls)}: {url[:120]}", file=sys.stderr)
+            print(f"{'='*60}", file=sys.stderr)
 
-        read_not_replied = report_format == "read-not-replied-today"
-
-        def _get_threads_one(unread_opt, read_not_replied_opt):
-            return get_facebook_threads(
-                driver,
-                unread_only=unread_opt,
-                read_not_replied_only=read_not_replied_opt,
-                within_week=True,
-                within_days=within_days,
-                within_today_only=within_today_only,
-                scroll_to_load_week=scroll_to_load_week,
-                wait_seconds=DEFAULT_WAIT,
-                debug=debug,
+            threads = _scrape_one_url(
+                driver, url, report_format, unread_only, within_days,
+                within_today_only, scroll_to_load_week, debug,
             )
+            for t in threads:
+                t["_source"] = f"link_{i+1}"
+            all_threads.extend(threads)
 
-        if read_not_replied and scroll_to_load_week:
-            scroll_down_until_date_then_back_to_top(driver, debug=debug)
-            threads1 = _get_threads_one(unread_only, True)
-            scroll_inbox_to_top(driver, wait_seconds=DEFAULT_WAIT)
-            time.sleep(0.8)
-            threads2 = _get_threads_one(unread_only, True)
-            seen_keys = set()
-            all_threads = []
-            for t in threads1 + threads2:
-                key = (t.get("sender") or "", t.get("time") or "", (t.get("message") or "")[:80])
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    all_threads.append(t)
-        else:
-            all_threads = _get_threads_one(unread_only, read_not_replied)
+            if i < len(urls) - 1:
+                time.sleep(2)
 
         report_text = build_report(
             all_threads,
@@ -130,12 +134,15 @@ if __name__ == "__main__":
         (os.environ.get("FB_CHROME_DEBUG_PORT") or os.environ.get("CHROME_DEBUG_PORT") or "").strip() or None
     )
     openclaw_target = (os.environ.get("LINE_OA_OPENCLAW_TARGET") or "").strip() or None
+    fb_inbox_urls = (os.environ.get("FB_INBOX_URL") or "").strip() or None
 
     parser = argparse.ArgumentParser(
-        description="Facebook Inbox - ตรวจหาข้อความที่ยังไม่อ่าน (เชื่อมต่อ Chrome ที่เปิดหน้า Inbox ไว้แล้ว)"
+        description="Facebook Inbox - ตรวจหาข้อความที่ยังไม่อ่าน (สร้างแท็บใหม่สำหรับแต่ละ URL จาก FB_INBOX_URL)"
     )
     parser.add_argument("--connect-chrome", type=str, default=chrome_port, metavar="PORT",
                         help="พอร์ต Chrome ที่เปิดไว้แล้ว (ใช้ FB_CHROME_DEBUG_PORT ใน .env)")
+    parser.add_argument("--urls", type=str, default=fb_inbox_urls, metavar="URLS",
+                        help="URL ของ FB Inbox คั่นด้วย comma (หรือใช้ FB_INBOX_URL ใน .env)")
     parser.add_argument("--unread-only", action="store_true", default=True, dest="unread_only",
                         help="รายงานเฉพาะแชทที่ยังไม่อ่าน (ค่าเริ่มต้น)")
     parser.add_argument("--all", action="store_false", dest="unread_only",
@@ -152,7 +159,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     scrape_facebook_inbox(
-        url=None,
+        urls=args.urls,
         report_format="summary-once",
         chrome_debug_port=args.connect_chrome,
         send_openclaw_target=args.send_openclaw_target,
