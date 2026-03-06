@@ -312,7 +312,7 @@ def get_facebook_threads(driver, unread_only=False, read_not_replied_only=False,
                         wait_seconds=DEFAULT_WAIT, debug=False, scroll_boundary_days=None):
     """
     ดึงรายการแชทจาก Facebook Inbox
-    unread_only=True: เฉพาะแถวที่มี _284c (ยังไม่อ่าน)
+    unread_only=True: เฉพาะแถวที่มี _284c (ยังไม่อ่าน) และข้อความ preview ไม่ขึ้นต้นด้วย "คุณ:" (Bot ยังไม่ได้ตอบ)
     read_not_replied_only=True: เฉพาะแถวที่อ่านแล้วแต่ยังไม่ตอบ
     """
     result = []
@@ -344,6 +344,20 @@ def get_facebook_threads(driver, unread_only=False, read_not_replied_only=False,
                         time_texts_in_batch.append(time_text or "")
                         if unread_only:
                             if not is_unread_element(row):
+                                continue
+                            if is_replied_by_us(preview_text):
+                                if debug:
+                                    print(
+                                        f"[DEBUG ยังไม่อ่าน] ข้าม (ขึ้นต้นด้วย 'คุณ:' = เราตอบแล้ว): sender={name_text!r}, preview={(preview_text or '')[:40]!r}...",
+                                        file=sys.stderr,
+                                    )
+                                continue
+                            if _is_system_preview(preview_text):
+                                if debug:
+                                    print(
+                                        f"[DEBUG ยังไม่อ่าน] ข้าม (ข้อความระบบ): sender={name_text!r}, preview={(preview_text or '')[:40]!r}...",
+                                        file=sys.stderr,
+                                    )
                                 continue
                         if read_not_replied_only:
                             if is_unread_element(row):
