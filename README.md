@@ -39,7 +39,9 @@ cp .env.example .env
 | `LINE_OA_URL` | URL หน้าแชท LINE OA (หนึ่ง URL หรือหลายห้องคั่นด้วย comma เช่น `https://chat.line.biz/xxx,https://chat.line.biz/yyy`) |
 | `LINE_OA_PORTS` | (หลายบัญชี) รายการ port คั่น comma สอดคล้องกับ URL — **ลิงก์แรกใช้ port แรก**, ลิงก์ที่สองใช้ port ที่สอง (เช่น `9222,9223`) |
 | `LINE_OA_INTERVAL` | ช่วงตรวจสอบ (วินาที) เมื่อรันโหมดต่อเนื่อง — ค่าเริ่มต้น 30 |
-| `CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับสคริปต์ (บัญชีเดียวหรือค่าเริ่มต้น) — ค่าเริ่มต้น 9222 |
+| `LINE_OA_CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับ LINE OA (หนึ่งหรือหลาย port คั่น comma เช่น `9222,9223`) — ถ้าไม่ตั้ง จะใช้ `CHROME_DEBUG_PORT` |
+| `FB_CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับ Facebook Inbox (หนึ่งหรือหลาย port คั่น comma เช่น `9224,9225`) — ถ้าไม่ตั้ง จะใช้ `CHROME_DEBUG_PORT` |
+| `CHROME_DEBUG_PORT` | ค่า fallback เมื่อไม่ตั้ง `LINE_OA_CHROME_DEBUG_PORT` / `FB_CHROME_DEBUG_PORT` — ค่าเริ่มต้น 9222 |
 | `LINE_OA_OPENCLAW_TARGET` | (ถ้าต้องการ) ส่งผลรายงานไป OpenClaw ที่ target นี้ เช่น `webchat` |
 
 ชื่อที่ถือว่าเป็น "ของเรา" ในแชท (สำหรับโหมดอ่านแล้วแต่ยังไม่ตอบ) ตั้งใน `line_oa_unread_messages.py` ที่ตัวแปร **`OUR_CHAT_HEADER_NAMES`** (เป็น list ของ string).
@@ -52,7 +54,8 @@ cp .env.example .env
 
 **รันครั้งเดียว เปิดตาม .env (แนะนำหลายบัญชี)**
 
-สคริปต์จะอ่าน **LINE_OA_PORTS** หรือ **CHROME_DEBUG_PORT** จาก `.env` แล้วเปิด Chrome ตามจำนวน port ที่กำหนด (ลิงก์แรกใช้ port แรก ฯลฯ)
+สคริปต์จะอ่าน **LINE_OA_PORTS** หรือ **LINE_OA_CHROME_DEBUG_PORT** จาก `.env` แล้วเปิด Chrome สำหรับ LINE OA ตามจำนวน port ที่กำหนด (ลิงก์แรกใช้ port แรก ฯลฯ)  
+สำหรับ Facebook ใช้ **FB_CHROME_DEBUG_PORT** ใน `.env` — เปิด Chrome แยก (หรือใช้พอร์ตคนละชุดกับ LINE)
 
 | บัญชี | Port | โปรไฟล์โฟลเดอร์ |
 |-------|------|------------------|
@@ -60,14 +63,13 @@ cp .env.example .env
 | ที่ 2 | 9223 | `chrome_debug_profile_2` |
 | ที่ 3 | 9224 | `chrome_debug_profile_3` |
 
-**ใน `.env` ตั้งเช่น**
+**ใน `.env` ตั้งเช่น (LINE 2 บัญชี, Facebook 2 บัญชี แยกพอร์ตกัน)**
 ```env
-LINE_OA_PORTS=9222,9223
+LINE_OA_CHROME_DEBUG_PORT=9222,9223
+# หรือใช้ LINE_OA_PORTS=9222,9223 เมื่อต้องการแยกรายการ port กับ URL
+FB_CHROME_DEBUG_PORT=9224,9225
 ```
-หรือ
-```env
-CHROME_DEBUG_PORT=9222,9223
-```
+หรือถ้าใช้พอร์ตร่วมกันแบบเดิม: `CHROME_DEBUG_PORT=9222`
 
 **Windows**
 ```cmd
@@ -83,12 +85,12 @@ start_chrome_for_script.bat
 
 **เปิดแค่บัญชีเดียวหรือเปิดแค่ slot ที่ต้องการ**
 
-- ไม่มี `.env` หรือมีแค่ `CHROME_DEBUG_PORT=9222` = เปิดแค่ 1 ตัว (port 9222)
+- ไม่มี `.env` หรือมีแค่ `LINE_OA_CHROME_DEBUG_PORT=9222` (หรือ `CHROME_DEBUG_PORT=9222`) = เปิดแค่ 1 ตัว (port 9222)
 - ส่ง argument ตัวเลข = เปิดแค่ slot นั้น: `start_chrome_for_script.bat 2` หรือ `./start_chrome_for_script.sh 2` → เปิดแค่ port 9223
 
 **กำหนดลิงก์กับ port คู่กัน (ลิงก์แรก–port แรก):** ใส่ `LINE_OA_URL=url1,url2` และ `LINE_OA_PORTS=9222,9223` ใน `.env` (หรือ `--url` กับ `--ports`) สคริปต์ Python จะเปิด url1 ใน Chrome ที่ port 9222 และ url2 ใน port 9223 ให้อัตโนมัติ (โหมด summary-once / read-not-replied-today เท่านั้น)
 
-(ถ้าใช้ cron สคริปต์ `run_line_oa_job.sh` / `run_read_not_replied_daily.sh` จะเช็คพอร์ต 9222 แล้วรัน Chrome ให้เองถ้ายังไม่เปิด)
+(ถ้าใช้ cron สคริปต์ `run_line_oa_job.sh` / `run_read_not_replied_daily.sh` จะเช็คพอร์ตจาก `LINE_OA_CHROME_DEBUG_PORT` แล้วรัน Chrome ให้เองถ้ายังไม่เปิด)
 
 ---
 
@@ -106,7 +108,7 @@ python line_oa_unread_messages.py --url "https://chat.line.biz/..." --connect-ch
 python line_oa_unread_messages.py --url "https://chat.line.biz/xxx,https://chat.line.biz/yyy" --connect-chrome 9222 --report-format summary-once
 ```
 
-ถ้าตั้ง `LINE_OA_URL` และ `CHROME_DEBUG_PORT` ใน `.env` แล้ว สามารถย่อเป็น:
+ถ้าตั้ง `LINE_OA_URL` และ `LINE_OA_CHROME_DEBUG_PORT` ใน `.env` แล้ว สามารถย่อเป็น:
 
 ```bash
 python line_oa_unread_messages.py --connect-chrome 9222 --report-format summary-once --send-openclaw-target webchat

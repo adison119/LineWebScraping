@@ -855,8 +855,8 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
     """
     รันตรวจสอบข้อความที่ยังไม่อ่านต่อเนื่อง
     url รับได้เป็น URL เดียว หรือหลาย URL คั่นด้วย comma (หลายห้องแชท)
-    ถ้าใส่ chrome_debug_port (หรือ CHROME_DEBUG_PORT ใน .env) = ใช้ Chrome ที่เปิดอยู่แล้ว ไม่ต้องเปิดใหม่
-    chrome_debug_ports = รายการ port คั่น comma (หรือ LINE_OA_PORTS ใน .env): ลิงก์แรกใช้ port แรก, ลิงก์ที่สองใช้ port ที่สอง
+    ถ้าใส่ chrome_debug_port (หรือ LINE_OA_CHROME_DEBUG_PORT ใน .env) = ใช้ Chrome ที่เปิดอยู่แล้ว ไม่ต้องเปิดใหม่
+    chrome_debug_ports = รายการ port คั่น comma (หรือ LINE_OA_PORTS / LINE_OA_CHROME_DEBUG_PORT ใน .env): ลิงก์แรกใช้ port แรก, ลิงก์ที่สองใช้ port ที่สอง
     for_test: ใช้กับ report_format read-not-replied-today เท่านั้น — เช็คเฉพาะแชทที่แสดง Yesterday
     """
     urls = _parse_urls(url)
@@ -921,7 +921,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
             driver = webdriver.Chrome(service=service, options=chrome_options)
         except SessionNotCreatedException as e:
             if "crashed" in str(e).lower() or "DevToolsActivePort" in str(e):
-                print("Chrome เปิดไม่สำเร็จ แนะนำให้ใช้โหมดเชื่อมต่อกับ Chrome ที่เปิดแล้ว (ดูใน .env ใส่ CHROME_DEBUG_PORT=9222)")
+                print("Chrome เปิดไม่สำเร็จ แนะนำให้ใช้โหมดเชื่อมต่อกับ Chrome ที่เปิดแล้ว (ดูใน .env ใส่ LINE_OA_CHROME_DEBUG_PORT=9222)")
             raise
         driver.set_window_size(1280, 900)
         driver.get(first_url)
@@ -1189,16 +1189,17 @@ if __name__ == "__main__":
         default_interval = int(os.environ.get("LINE_OA_INTERVAL", "30"))
     except ValueError:
         default_interval = 30
-    chrome_port = os.environ.get("CHROME_DEBUG_PORT", "").strip()
-    line_oa_ports = (os.environ.get("LINE_OA_PORTS", "") or "").strip() or None
+    line_oa_port_env = (os.environ.get("LINE_OA_CHROME_DEBUG_PORT") or os.environ.get("CHROME_DEBUG_PORT") or "").strip()
+    chrome_port = line_oa_port_env or None
+    line_oa_ports = (os.environ.get("LINE_OA_PORTS", "") or "").strip() or (line_oa_port_env or None)
     default_openclaw = (os.environ.get("LINE_OA_OPENCLAW_TARGET", "") or "").strip() or None
     parser = argparse.ArgumentParser(description="LINE OA - ตรวจสอบข้อความที่ยังไม่อ่าน")
     parser.add_argument("--url", default=default_url, help="URL หน้าแชท LINE OA (หลายห้องคั่นด้วย comma ได้)")
     parser.add_argument("--interval", type=int, default=default_interval, help="ระยะห่างตรวจสอบ วินาที")
     parser.add_argument("--debug", action="store_true", help="โหมด debug")
     parser.add_argument("--max-hours", type=float, default=None, help="หยุดหลังรันครบ N ชม.")
-    parser.add_argument("--connect-chrome", type=str, default=chrome_port or None, metavar="PORT", help="เชื่อมต่อกับ Chrome (port เดียว หรือหลาย port คั่น comma: ลิงก์แรกใช้ port แรก)")
-    parser.add_argument("--ports", type=str, default=line_oa_ports, metavar="PORTS", help="รายการ port คั่น comma สอดคล้องกับ --url (หรือใช้ LINE_OA_PORTS ใน .env)")
+    parser.add_argument("--connect-chrome", type=str, default=chrome_port or None, metavar="PORT", help="เชื่อมต่อกับ Chrome (หรือใช้ LINE_OA_CHROME_DEBUG_PORT ใน .env)")
+    parser.add_argument("--ports", type=str, default=line_oa_ports, metavar="PORTS", help="รายการ port คั่น comma สอดคล้องกับ --url (หรือใช้ LINE_OA_PORTS / LINE_OA_CHROME_DEBUG_PORT ใน .env)")
     parser.add_argument("--report-format", type=str, choices=["full", "summary-once", "read-not-replied-today"], default="full",
                         help="รูปแบบการรายงาน: full (ข้อความเต็ม), summary-once (ชื่อและเวลา, รันครั้งเดียว), read-not-replied-today (อ่านแล้วยังไม่ตอบของวันนี้)")
     parser.add_argument("--send-openclaw-target", type=str, default=default_openclaw, metavar="TARGET",
