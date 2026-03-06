@@ -1,9 +1,15 @@
 # LineWebScraping
 
-โปรเจกต์สำหรับดึงข้อมูลจาก LINE Official Account (LINE OA) ผ่านเบราว์เซอร์ Chrome ด้วย Selenium มีสองโหมดหลัก:
+โปรเจกต์สำหรับดึงข้อมูลจาก **LINE Official Account (LINE OA)** และ **Facebook Inbox (Business Suite)** ผ่านเบราว์เซอร์ Chrome ด้วย Selenium
 
-1. **ข้อความที่ยังไม่อ่าน** — รายงานแชทที่มี badge ยังไม่อ่าน (รันครั้งเดียวหรือตามเวลา เช่น ทุก 1 ชม.)
-2. **อ่านแล้วแต่ยังไม่ตอบของวันนี้** — รายงานแชทที่ลูกค้าส่งมาแล้วเราอ่านแล้วแต่ยังไม่ตอบ (เหมาะรันครั้งเดียวหลังเลิกงาน เช่น 17:35)
+### แพลตฟอร์มที่รองรับ
+
+| แพลตฟอร์ม | โหมด | คำอธิบาย |
+|-----------|------|----------|
+| LINE OA | ยังไม่อ่าน | รายงานแชทที่มี badge ยังไม่อ่าน |
+| LINE OA | อ่านแล้วแต่ยังไม่ตอบ | แชทที่ลูกค้าส่งมาแล้วเราอ่านแล้วแต่ยังไม่ตอบ |
+| Facebook Inbox | ยังไม่อ่าน | รายงานแชท Facebook ที่ยังไม่อ่าน |
+| Facebook Inbox | อ่านแล้วแต่ยังไม่ตอบ | แชท Facebook ที่อ่านแล้วแต่ยังไม่ตอบ |
 
 รองรับการส่งผลไป OpenClaw (ถ้ากำหนด `LINE_OA_OPENCLAW_TARGET` ใน `.env`)
 
@@ -43,6 +49,9 @@ cp .env.example .env
 | `FB_CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับ Facebook Inbox (หนึ่งหรือหลาย port คั่น comma เช่น `9224,9225`) — ถ้าไม่ตั้ง จะใช้ `CHROME_DEBUG_PORT` |
 | `CHROME_DEBUG_PORT` | ค่า fallback เมื่อไม่ตั้ง `LINE_OA_CHROME_DEBUG_PORT` / `FB_CHROME_DEBUG_PORT` — ค่าเริ่มต้น 9222 |
 | `LINE_OA_OPENCLAW_TARGET` | (ถ้าต้องการ) ส่งผลรายงานไป OpenClaw ที่ target นี้ เช่น `webchat` |
+| `FB_INBOX_URL` | URL ของ Facebook Inbox (หลายลิงก์คั่นด้วย comma) |
+| `FB_CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับ Facebook Inbox เช่น `9224` |
+| `FB_CHROME_DEBUG_PROFILE` | หมายเลข profile Chrome สำหรับ Facebook เช่น `3` |
 
 ชื่อที่ถือว่าเป็น "ของเรา" ในแชท (สำหรับโหมดอ่านแล้วแต่ยังไม่ตอบ) ตั้งใน `line_oa_unread_messages.py` ที่ตัวแปร **`OUR_CHAT_HEADER_NAMES`** (เป็น list ของ string).
 
@@ -161,17 +170,103 @@ python line_oa_read_not_replied_once.py --connect-chrome 9222 --send-openclaw-ta
 
 ---
 
+## Facebook Inbox
+
+### ตั้งค่า `.env`
+
+```env
+FB_INBOX_URL=https://business.facebook.com/latest/inbox/all?page_id=...,https://business.facebook.com/latest/inbox/all?page_id=...
+FB_CHROME_DEBUG_PORT=9224
+FB_CHROME_DEBUG_PROFILE=3
+```
+
+- `FB_INBOX_URL` — ลิงก์หน้า Inbox ของ Facebook Business Suite (รองรับหลายลิงก์คั่นด้วย comma)
+- `FB_CHROME_DEBUG_PORT` — พอร์ต Chrome ที่เปิดสำหรับ Facebook (แยกจาก LINE OA)
+
+### รันด้วยมือ
+
+**ข้อความที่ยังไม่อ่าน**
+
+```bash
+python facebook_unread_messages.py --debug
+```
+
+**อ่านแล้วแต่ยังไม่ตอบ**
+
+```bash
+python facebook_read_not_replied.py --debug
+```
+
+### รันด้วย Shell Script
+
+```bash
+# ยังไม่อ่าน
+./run_facebook_job.sh
+
+# อ่านแล้วแต่ยังไม่ตอบ
+./run_facebook_read_not_replied_job.sh
+```
+
+ทั้ง 2 สคริปต์รับ argument เพิ่มเติมได้ เช่น `--debug`, `--today-only`, `--within-days 5`, `--no-scroll`
+
+### วิธีการทำงาน
+
+สคริปต์ Facebook ทำงานดังนี้:
+
+1. **เชื่อมต่อ Chrome** ที่เปิดอยู่ผ่าน debug port (`FB_CHROME_DEBUG_PORT`)
+2. **สร้างแท็บใหม่** สำหรับแต่ละลิงก์ใน `FB_INBOX_URL`
+3. **เลื่อนลง** จนเจอฟอร์มวันที่ (วว/ดด/ปป) เพื่อให้ FB โหลดรายการแชททั้งหมด
+4. **เลื่อนกลับขึ้นบนสุด** แล้ว **ตรวจสอบ 2 ครั้ง** เพื่อความถูกต้อง (deduplicate)
+5. **ปิดแท็บ** แล้วทำลิงก์ถัดไป
+6. **รวมผลทุกลิงก์** แล้วสร้างรายงาน
+
+### ตัวอย่างผลลัพธ์
+
+```
+📋 Facebook Inbox: อ่านแล้วแต่ยังไม่ตอบ (ทั้งสัปดาห์)
+ลิงก์ที่ 1/2:
+  ชื่อ: **Supanee Rungsirat** ข้อความ: **ร้านอยู่ที่ไหน** เวลา: **วันพฤหัสบดี พฤ.**
+  ชื่อ: **วรวิทย์ คลังแสง** ข้อความ: **ขอเรทราคา - ขั้นต่ำ** เวลา: **วันพฤหัสบดี พฤ.**
+ลิงก์ที่ 2/2:
+  ชื่อ: **อดิศร เวฬุวนารักษ์** ข้อความ: **ทดสอบแชทนี้ไม่ต้องอ่าน** เวลา: **วันพฤหัสบดี พฤ.**
+--- รวม 3 รายการ ---
+```
+
+---
+
 ## โครงสร้างไฟล์หลัก
+
+### LINE OA
 
 | ไฟล์ | ความหมาย |
 |------|----------|
 | `line_oa_unread_messages.py` | สคริปต์หลัก: ดึงข้อความยังไม่อ่าน / อ่านแล้วยังไม่ตอบ รองรับหลายโหมด |
 | `line_oa_read_not_replied_once.py` | เรียกโหมด "อ่านแล้วแต่ยังไม่ตอบของวันนี้" รันครั้งเดียว (สำหรับ cron) |
-| `run_line_oa_job.sh` | Wrapper: เปิด Chrome ถ้ายังไม่มี แล้วรันรายงานยังไม่อ่าน (summary-once) |
+| `run_line_oa_job.sh` | Wrapper: เปิด Chrome ถ้ายังไม่มี แล้วรันรายงานยังไม่อ่าน |
 | `run_read_not_replied_daily.sh` | Wrapper: เปิด Chrome ถ้ายังไม่มี แล้วรันอ่านแล้วยังไม่ตอบรายวัน |
-| `start_chrome_for_script.bat` / `.sh` | เปิด Chrome ที่ port 9222 (หรือ 9223, 9224 ถ้ารันด้วย argument 2, 3) สำหรับให้สคริปต์เชื่อมต่อ |
-| `close_chrome_port_9222.py` / `.bat` / `.sh` | ปิด Chrome ที่ใช้ port ที่กำหนด (default 9222; ใช้ `--port` หรือ `--all` สำหรับหลายบัญชี) |
-| `crontab.example` | ตัวอย่าง crontab สำหรับรันทั้งสองงานตามเวลา |
+
+### Facebook Inbox
+
+| ไฟล์ | ความหมาย |
+|------|----------|
+| `facebook_unread_messages.py` | Orchestrator: เชื่อม Chrome → สร้างแท็บ → สแกนแต่ละลิงก์ → รายงาน |
+| `facebook_read_not_replied.py` | รันโหมด "อ่านแล้วแต่ยังไม่ตอบ" โดยตรง |
+| `fb_connect_chrome.py` | เชื่อมต่อ Chrome ผ่าน debug port |
+| `fb_open_tab.py` | สร้างแท็บใหม่ / ปิดแท็บ |
+| `fb_scroll_load.py` | เลื่อนลงจนเจอ วว/ดด/ปป → เลื่อนขึ้น → ตรวจ 2 ครั้ง → dedup |
+| `fb_get_threads.py` | ดึงรายการแชทจากหน้า Inbox |
+| `fb_report.py` | สร้างรายงานจัดกลุ่มตามลิงก์ |
+| `fb_openclaw.py` | ส่งรายงานไป OpenClaw |
+| `run_facebook_job.sh` | Wrapper: รันรายงานยังไม่อ่าน |
+| `run_facebook_read_not_replied_job.sh` | Wrapper: รันรายงานอ่านแล้วแต่ยังไม่ตอบ |
+
+### ไฟล์ทั่วไป
+
+| ไฟล์ | ความหมาย |
+|------|----------|
+| `start_chrome_for_script.bat` / `.sh` | เปิด Chrome ที่ debug port สำหรับให้สคริปต์เชื่อมต่อ |
+| `close_chrome_port_9222.py` / `.bat` / `.sh` | ปิด Chrome ที่ใช้ port ที่กำหนด |
+| `crontab.example` | ตัวอย่าง crontab สำหรับรันตามเวลา |
 | `.env.example` | ตัวอย่าง config — copy เป็น `.env` แล้วแก้ค่า (อย่า commit `.env`) |
 | `requirements.txt` | Python dependencies (selenium, webdriver-manager) |
 

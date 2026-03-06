@@ -12,6 +12,7 @@ FB_CHROME_DEBUG_PROFILE=""
 if [[ -f .env ]]; then
   set -a
   while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line//$'\r'/}"
     if [[ "$line" =~ ^[[:space:]]*LINE_OA_PORTS=(.*) ]]; then
       LINE_OA_PORTS="${BASH_REMATCH[1]}"
     fi

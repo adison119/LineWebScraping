@@ -8,7 +8,9 @@ WORKSPACE="${HOME}/.openclaw/workspace/LineWebScraping"
 cd "$WORKSPACE" || { echo "ไม่เจอโฟลเดอร์: $WORKSPACE"; exit 1; }
 
 # โหลด .env (ต้องอยู่หลัง cd เพื่อใช้ path ที่ถูก)
-if [ -f .env ]; then set -a; . ./.env; set +a; fi
+if [ -f .env ]; then
+  _tmpenv=$(mktemp); sed 's/\r$//' .env > "$_tmpenv"; set -a; . "$_tmpenv"; set +a; rm -f "$_tmpenv"
+fi
 
 # 1. เช็คพอร์ต LINE ถ้าไม่เปิดก็รัน Chrome แล้วรอ 5 วินาที
 LINE_PORT="${LINE_OA_CHROME_DEBUG_PORT:-${CHROME_DEBUG_PORT:-9222}}"
