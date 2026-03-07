@@ -254,35 +254,42 @@ def _scrollable_has_date_form(driver, scrollable):
 
 
 def scroll_down_until_date_then_back_to_top(driver, max_scrolls=150, scroll_step=400,
-                                            wait_seconds=DEFAULT_WAIT, debug=False):
+                                            min_scrolls=0, wait_seconds=DEFAULT_WAIT, debug=False):
     """
     เลื่อนลงไปข้างล่างจนเจอฟอร์มวันที่ (วว/ดด/ปป) แล้วเลื่อนกลับขึ้นบนสุด
-    เรียกก่อนเริ่มการตรวจสอบ (โหมดอ่านแล้วแต่ยังไม่ตอบ) เพื่อให้ FB โหลดรายการครบ
+    min_scrolls: เลื่อนอย่างน้อยกี่ครั้งก่อนจะเช็คฟอร์มวันที่ (0 = เช็คได้ทันที)
+    คืนจำนวนครั้งที่เลื่อนจริง (ใช้กำหนด min_scrolls รอบถัดไปให้ไกลขึ้นเล็กน้อย)
     """
     ready, _ = wait_for_inbox_ready(driver, wait_seconds=wait_seconds, debug=debug)
     if not ready:
-        return
+        return 0
     scrollable = _get_scrollable_from_first_row(driver)
     if not scrollable:
         if debug:
             print("[DEBUG] ไม่พบ container สำหรับเลื่อน — ข้ามขั้นเลื่อนจนเจอฟอร์มวันที่", file=sys.stderr)
-        return
+        return 0
+    scroll_count = 0
     try:
         for i in range(max_scrolls):
-            if _scrollable_has_date_form(driver, scrollable):
+            # หลัง min_scrolls รอบแล้วถึงจะเช็คฟอร์มวันที่
+            if i >= min_scrolls and _scrollable_has_date_form(driver, scrollable):
+                scroll_count = i + 1
                 if debug:
-                    print(f"[DEBUG] เจอฟอร์มวันที่ (วว/ดด/ปป) หลังเลื่อน {i + 1} รอบ — กลับขึ้นบนสุด", file=sys.stderr)
+                    print(f"[DEBUG] เจอฟอร์มวันที่ (วว/ดด/ปป) หลังเลื่อน {scroll_count} รอบ — กลับขึ้นบนสุด", file=sys.stderr)
                 break
             driver.execute_script(
                 "arguments[0].scrollTop = arguments[0].scrollTop + arguments[1];",
                 scrollable, scroll_step,
             )
             time.sleep(0.2)
+            scroll_count = i + 1
         driver.execute_script("arguments[0].scrollTop = 0;", scrollable)
-        time.sleep(0.5)
+        time.sleep(5)  # รอให้โหลดข้อมูลครบหลังเลื่อนจนถึง dd/mm/yy แล้วกลับบนสุด
+        return scroll_count
     except Exception as e:
         if debug:
             print(f"[DEBUG] scroll_down_until_date_then_back_to_top: {e}", file=sys.stderr)
+        return scroll_count
 
 
 def wait_for_inbox_ready(driver, wait_seconds=DEFAULT_WAIT, debug=False):

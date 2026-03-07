@@ -3,8 +3,8 @@
 โหลดข้อมูลแชทด้วยการเลื่อน — 1 ฟังก์ชัน: scroll_load_threads()
 
 ขั้นตอน:
-  1) เลื่อนลงจนเจอฟอร์มวันที่ (วว/ดด/ปป) → ให้ FB โหลดรายการแชททั้งหมด
-  2) เลื่อนกลับขึ้นบนสุด
+  1) เลื่อนลงจนเจอฟอร์มวันที่ (วว/ดด/ปป) → กลับบนสุด → รอ 5 วิ (รอบที่ 1)
+  2) เลื่อนลงอีกครั้งให้ไกลขึ้นจากค่าครั้งแรก (ครั้งแรก + เล็กน้อย) → กลับบนสุด → รอ 5 วิ (รอบที่ 2)
   3) ดึง threads รอบที่ 1
   4) เลื่อนขึ้นบนสุดอีกครั้ง
   5) ดึง threads รอบที่ 2
@@ -29,7 +29,18 @@ def scroll_load_threads(driver, *, unread_only=False, read_not_replied_only=Fals
     ใช้ได้ทุกโหมด (unread / read-not-replied / all)
     """
     if scroll_to_load_week:
-        scroll_down_until_date_then_back_to_top(driver, debug=debug)
+        # รอบที่ 1: เลื่อนจนเจอ dd/mm/yy เก็บจำนวนครั้งที่เลื่อน
+        first_scroll_count = scroll_down_until_date_then_back_to_top(
+            driver, max_scrolls=200, min_scrolls=0, debug=debug
+        )
+        # รอบที่ 2: เลื่อนให้ไกลขึ้นจากครั้งแรก (ครั้งแรก + 40 รอบ แล้วค่อยเช็คฟอร์ม)
+        extra = 40
+        scroll_down_until_date_then_back_to_top(
+            driver,
+            max_scrolls=first_scroll_count + extra + 100,
+            min_scrolls=first_scroll_count + extra,
+            debug=debug,
+        )
 
     def _collect():
         return get_facebook_threads(
