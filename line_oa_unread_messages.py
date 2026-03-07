@@ -11,6 +11,7 @@ from selenium.common.exceptions import SessionNotCreatedException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import random
 import time
 import argparse
 import os
@@ -632,6 +633,11 @@ def _send_report_to_openclaw_targets(message, send_openclaw_target):
         print(f"(ส่ง openclaw สำเร็จ {ok}/{len(targets)} target)", file=sys.stderr)
 
 
+def _random_delay(min_sec=0.5, max_sec=1.5):
+    """รอแบบสุ่ม เพื่อให้พฤติกรรมดูไม่เป็นจังหวะซ้ำ (ลดโอกาสถูกตรวจจับว่าเป็น automation)"""
+    time.sleep(random.uniform(min_sec, max_sec))
+
+
 def _open_conversation(driver, row_element):
     """คลิกแถวแชทเพื่อเข้าหน้ารายละเอียด แล้วรอให้โหลด"""
     try:
@@ -647,7 +653,7 @@ def _open_conversation(driver, row_element):
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.chat-content, div.chat-body")))
     except Exception:
         pass
-    time.sleep(0.5)
+    _random_delay(0.4, 1.2)
 
 
 def _back_to_list(driver):
@@ -666,7 +672,7 @@ def _back_to_list(driver):
         wait.until(EC.presence_of_element_located((By.XPATH, conv_xpath)))
     except Exception:
         pass
-    time.sleep(0.5)
+    _random_delay(0.4, 1.2)
 
 
 def _reload_current_page_and_wait(driver, wait_seconds=DEFAULT_WAIT):
@@ -762,6 +768,7 @@ def get_read_not_replied_today(driver, our_names=None, wait_seconds=DEFAULT_WAIT
                 if debug:
                     print(f"[DEBUG] read+today+not replied: {row['sender']!r}")
             _back_to_list(driver)
+            _random_delay(1.0, 3.0)  # ระหว่างแชท: ลดจังหวะซ้ำ
         except Exception as e:
             if debug:
                 print(f"[DEBUG] skip row {row.get('sender')}: {e}")
@@ -769,6 +776,7 @@ def get_read_not_replied_today(driver, our_names=None, wait_seconds=DEFAULT_WAIT
                 _back_to_list(driver)
             except Exception:
                 pass
+            _random_delay(0.8, 2.0)
             continue
     return read_not_replied
 
@@ -799,6 +807,7 @@ def _process_read_not_replied_rows(driver, rows, our_names, wait_seconds=DEFAULT
                 if debug:
                     print(f"[DEBUG] read+not replied: {row['sender']!r}")
             _back_to_list(driver)
+            _random_delay(1.0, 3.0)  # ระหว่างแชท: ลดจังหวะซ้ำ
         except Exception as e:
             if debug:
                 print(f"[DEBUG] skip row {row.get('sender')}: {e}")
@@ -806,6 +815,7 @@ def _process_read_not_replied_rows(driver, rows, our_names, wait_seconds=DEFAULT
                 _back_to_list(driver)
             except Exception:
                 pass
+            _random_delay(0.8, 2.0)
             continue
     return result
 
