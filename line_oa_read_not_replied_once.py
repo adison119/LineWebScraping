@@ -3,11 +3,11 @@
 LINE OA - ตรวจข้อความที่อ่านแล้วแต่ยังไม่ตอบของวันนี้ (รันครั้งเดียวแล้วจบ ไม่วนลูป)
 สำหรับให้ OpenClaw / cron / Task Scheduler เรียกหลังเวลาเลิกงาน
 
-- รันครั้งเดียว: ตรวจรายการ → ส่งผลไป openclaw (ถ้ากำหนด) → จบ (ไม่มี while loop)
+- รันครั้งเดียว: ตรวจรายการ → ส่งผลไป Cliq (ถ้ากำหนด CLIQ_WEBHOOK_URL) → จบ (ไม่มี while loop)
 - ตั้งเวลา: ใช้ cron หรือ Windows Task Scheduler ให้รันคำสั่งนี้ที่เวลาที่ต้องการ (เช่น 18:00)
 
-ใช้ .env: LINE_OA_URL, LINE_OA_CHROME_DEBUG_PORT, LINE_OA_OPENCLAW_TARGET (ถ้าต้องการส่งผลไป openclaw)
-หรือส่งผ่านอาร์กิวเมนต์: --url, --connect-chrome, --send-openclaw-target
+ใช้ .env: LINE_OA_URL, LINE_OA_CHROME_DEBUG_PORT, CLIQ_WEBHOOK_URL (ถ้าต้องการส่งผลไป Cliq)
+หรือส่งผ่านอาร์กิวเมนต์: --url, --connect-chrome, --cliq / --cliq-webhook-url
 """
 import argparse
 import os
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     chrome_port = (
         (os.environ.get("LINE_OA_CHROME_DEBUG_PORT") or os.environ.get("CHROME_DEBUG_PORT") or "").strip() or None
     )
-    openclaw_target = os.environ.get("LINE_OA_OPENCLAW_TARGET", "").strip() or None
+    default_cliq_url = os.environ.get("CLIQ_WEBHOOK_URL", "").strip() or None
 
     parser = argparse.ArgumentParser(
         description="LINE OA - ตรวจอ่านแล้วแต่ยังไม่ตอบของวันนี้ (รันครั้งเดียว สำหรับ cron)"
@@ -57,8 +57,9 @@ if __name__ == "__main__":
     parser.add_argument("--url", default=default_url, help="URL หน้าแชท LINE OA (หรือใช้ LINE_OA_URL ใน .env)")
     parser.add_argument("--connect-chrome", type=str, default=chrome_port, metavar="PORT",
                         help="เชื่อมต่อ Chrome ที่เปิดอยู่แล้ว (หรือใช้ LINE_OA_CHROME_DEBUG_PORT ใน .env)")
-    parser.add_argument("--send-openclaw-target", type=str, default=openclaw_target, metavar="TARGET",
-                        help="ส่งผลรายงานไป openclaw -t TARGET (หรือใช้ LINE_OA_OPENCLAW_TARGET ใน .env)")
+    parser.add_argument("--cliq", action="store_true", help="ส่งผลรายงานไป Cliq (ใช้ CLIQ_WEBHOOK_URL ใน .env)")
+    parser.add_argument("--cliq-webhook-url", type=str, default=default_cliq_url, metavar="URL",
+                        help="Webhook URL ของ Cliq (หรือใช้ CLIQ_WEBHOOK_URL ใน .env)")
     parser.add_argument("--debug", action="store_true", help="โหมด debug")
     parser.add_argument("--for-test", action="store_true", dest="for_test",
                         help="โหมดทดสอบ: เช็คเฉพาะแชทที่แสดง Yesterday")
@@ -68,6 +69,7 @@ if __name__ == "__main__":
         print("กรุณาตั้ง LINE_OA_URL ใน .env หรือส่ง --url", file=sys.stderr)
         sys.exit(1)
 
+    cliq_url = (args.cliq_webhook_url or "").strip() or (default_cliq_url if args.cliq else None)
     scrape_line_oa_unread_messages_continuous(
         args.url,
         check_interval_seconds=30,
@@ -75,6 +77,6 @@ if __name__ == "__main__":
         max_hours=None,
         chrome_debug_port=args.connect_chrome,
         report_format="read-not-replied-today",
-        send_openclaw_target=args.send_openclaw_target,
+        cliq_webhook_url=cliq_url,
         for_test=args.for_test,
     )

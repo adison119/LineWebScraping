@@ -7,7 +7,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import SessionNotCreatedException
+from selenium.common.exceptions import SessionNotCreatedException, StaleElementReferenceException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -20,6 +20,11 @@ import shutil
 import socket
 import subprocess
 import sys
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 # โฟลเดอร์เดียวกับสคริปต์
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -221,6 +226,7 @@ def safe_find_text(parent, xpath, default=""):
 
 def get_unread_messages(driver, wait_seconds=DEFAULT_WAIT, debug=False):
     unread_messages_data = []
+    seen = set()  # กรองรายการซ้ำ (แชทเดียวกันอาจโผล่ทั้งรายการปักหมุดและรายการหลัก)
     try:
         wait = WebDriverWait(driver, wait_seconds)
         # รอให้มีอย่างน้อย container ของรายการแชทโหลด (ลองหลายแบบ)
@@ -245,13 +251,20 @@ def get_unread_messages(driver, wait_seconds=DEFAULT_WAIT, debug=False):
                     message_text = safe_find_text(conv, preview_xpath)
                     time_text = safe_find_text(conv, time_xpath)
                     if name_text or message_text or time_text:
+                        sender = name_text or "(ไม่มีชื่อ)"
+                        message = message_text or "(ไม่มีข้อความ)"
+                        time_str = time_text or "(ไม่มีเวลา)"
+                        key = (sender, time_str, message)
+                        if key in seen:
+                            continue
+                        seen.add(key)
                         unread_messages_data.append({
-                            "sender": name_text or "(ไม่มีชื่อ)",
-                            "message": message_text or "(ไม่มีข้อความ)",
-                            "time": time_text or "(ไม่มีเวลา)",
+                            "sender": sender,
+                            "message": message,
+                            "time": time_str,
                         })
                         if debug:
-                            print(f"[DEBUG] found: sender={name_text!r}, message={message_text!r}, time={time_text!r}")
+                            print(f"[DEBUG] found: sender={sender!r}, message={message!r}, time={time_str!r}")
                 except Exception as e:
                     if debug:
                         print(f"[DEBUG] skip conv: {e}")
@@ -266,8 +279,9 @@ def get_unread_messages(driver, wait_seconds=DEFAULT_WAIT, debug=False):
 
 
 def get_read_today_conversations(driver, wait_seconds=DEFAULT_WAIT, debug=False):
-    """ดึงรายการแชทที่อ่านแล้วและของวันนี้ (เวลาแสดงเป็น HH:MM) พร้อม element สำหรับคลิกเข้า"""
+    """ดึงรายการแชทที่อ่านแล้วและของวันนี้ (เวลาแสดงเป็น HH:MM) พร้อม element สำหรับคลิกเข้า — กรองรายการซ้ำ"""
     result = []
+    seen = set()
     try:
         wait = WebDriverWait(driver, wait_seconds)
         for conv_xpath, _name_xpath, _preview_xpath, _time_xpath in CONVERSATION_SELECTORS:
@@ -292,14 +306,21 @@ def get_read_today_conversations(driver, wait_seconds=DEFAULT_WAIT, debug=False)
                         continue  # ข้ามที่ไม่ใช่วันนี้
                     name_text = safe_find_text(conv, name_xpath)
                     message_text = safe_find_text(conv, preview_xpath)
+                    sender = name_text or "(ไม่มีชื่อ)"
+                    message = message_text or "(ไม่มีข้อความ)"
+                    time_str = time_text or "(ไม่มีเวลา)"
+                    key = (sender, time_str, message)
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     result.append({
-                        "sender": name_text or "(ไม่มีชื่อ)",
-                        "message": message_text or "(ไม่มีข้อความ)",
-                        "time": time_text or "(ไม่มีเวลา)",
+                        "sender": sender,
+                        "message": message,
+                        "time": time_str,
                         "element": conv,
                     })
                     if debug:
-                        print(f"[DEBUG] read+today: sender={name_text!r}, time={time_text!r}")
+                        print(f"[DEBUG] read+today: sender={sender!r}, time={time_str!r}")
                 except Exception as e:
                     if debug:
                         print(f"[DEBUG] skip conv: {e}")
@@ -388,10 +409,323 @@ def _scroll_chat_list_until_weekday(driver, step_px=400, max_scrolls=80, pause=0
         pass
 
 
+def _scroll_chat_list_to_bottom(driver, step_px=400, max_scrolls=120, pause=0.3):
+    """
+    เลื่อนรายการแชทซ้ายลงจนถึงล่าง (ไม่หยุดที่ weekday) เพื่อโหลดแชททั้งหมด
+    ใช้กับ get_all_conversation_rows
+    """
+    conv_xpath = CONVERSATION_SELECTORS[0][0]
+    try:
+        els = driver.find_elements(By.XPATH, conv_xpath)
+        if not els:
+            return
+        container = None
+        try:
+            first = els[0]
+            for xpath in [
+                "./ancestor::div[contains(@class,'list-group')][1]",
+                "./ancestor::div[contains(@class,'overflow')][1]",
+                "./ancestor::div[contains(@class,'scroll')][1]",
+                "./ancestor::div[contains(@class,'sidebar') or contains(@class,'chat-list')][1]",
+                "./..",
+            ]:
+                try:
+                    parent = first.find_element(By.XPATH, xpath)
+                    if parent:
+                        sh = driver.execute_script("return arguments[0].scrollHeight;", parent)
+                        ch = driver.execute_script("return arguments[0].clientHeight;", parent)
+                        if sh > ch + 10:
+                            container = parent
+                            break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        if not container:
+            try:
+                container = driver.find_element(By.TAG_NAME, "body")
+            except Exception:
+                return
+        last_top = -1
+        for scroll_i in range(max_scrolls):
+            try:
+                driver.execute_script("arguments[0].scrollTop += arguments[1];", container, step_px)
+                time.sleep(pause)
+                top = driver.execute_script("return arguments[0].scrollTop;", container)
+                height = driver.execute_script("return arguments[0].clientHeight;", container)
+                total = driver.execute_script("return arguments[0].scrollHeight;", container)
+                at_bottom = top + height >= total - 2
+                no_progress = top == last_top
+                if at_bottom:
+                    for wait_attempt in range(3):
+                        time.sleep(0.8)
+                        total2 = driver.execute_script("return arguments[0].scrollHeight;", container)
+                        if total2 > total:
+                            total = total2
+                            at_bottom = False
+                            break
+                    if at_bottom:
+                        break
+                if no_progress:
+                    break
+                last_top = top
+            except Exception:
+                break
+    except Exception:
+        pass
+
+
+def get_all_conversation_rows(driver, wait_seconds=DEFAULT_WAIT, debug=False, today_yesterday_only=False):
+    """
+    ดึงรายการแชทจากซ้าย — dedupe ตามชื่อ
+    - today_yesterday_only=False: scroll จนล่างแล้วเก็บทุกแถว
+    - today_yesterday_only=True: scroll จนเจอวันเก่ากว่าเมื่อวาน แล้วเก็บเฉพาะแชทที่เวลาเป็นวันนี้หรือเมื่อวาน
+    คืน list of {"name": str, "element": WebElement}
+    """
+    result = []
+    seen_names = set()
+    try:
+        wait = WebDriverWait(driver, wait_seconds)
+        for conv_xpath, _n, _p, _t in CONVERSATION_SELECTORS:
+            try:
+                wait.until(EC.presence_of_element_located((By.XPATH, conv_xpath)))
+                break
+            except Exception:
+                continue
+        if today_yesterday_only:
+            _scroll_chat_list_until_weekday(driver)
+        else:
+            _scroll_chat_list_to_bottom(driver)
+        time.sleep(0.5)
+        conv_xpath = CONVERSATION_SELECTORS[0][0]
+        name_xpath = CONVERSATION_SELECTORS[0][1]
+        time_xpath = CONVERSATION_SELECTORS[0][3]
+        try:
+            conversations = driver.find_elements(By.XPATH, conv_xpath)
+        except Exception:
+            conversations = []
+        for conv in conversations:
+            try:
+                if today_yesterday_only:
+                    time_text = safe_find_text(conv, time_xpath)
+                    if not _is_time_today(time_text) and not _is_time_yesterday(time_text):
+                        if debug:
+                            name_preview = (safe_find_text(conv, name_xpath) or "").strip() or "(ไม่มีชื่อ)"
+                            print(f"[DEBUG] ข้าม (เวลาไม่ใช่วันนี้/เมื่อวาน): {name_preview!r} — time={time_text!r}", file=sys.stderr)
+                        continue
+                name_text = safe_find_text(conv, name_xpath)
+                name = (name_text or "").strip() or "(ไม่มีชื่อ)"
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                result.append({"name": name, "element": conv})
+                if debug:
+                    print(f"[DEBUG] get_all_conversation_rows: {name!r}", file=sys.stderr)
+            except Exception as e:
+                if debug:
+                    print(f"[DEBUG] skip conv: {e}", file=sys.stderr)
+                continue
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] get_all_conversation_rows error: {e}", file=sys.stderr)
+    return result
+
+
+def count_messages_in_open_chat(driver, max_scrolls=50, pause=0.4, debug=False):
+    """
+    นับจำนวนข้อความ (message bubbles เรา+ลูกค้า) ในหน้ารายละเอียดแชทที่เปิดอยู่
+    เลื่อนขึ้นในพื้นที่แชทขวาเพื่อโหลดข้อความเก่าทั้งหมด แล้วนับ LAST_CHAT_BLOCK_CSS
+    คืนจำนวนข้อความรวม (int)
+    """
+    try:
+        wait = WebDriverWait(driver, DEFAULT_WAIT)
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)))
+        except Exception:
+            pass
+        # หา scroll container ของพื้นที่แชทขวา (ancestor ของข้อความที่มี scrollHeight > clientHeight)
+        try:
+            first_block = driver.find_element(By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)
+        except Exception:
+            return 0
+        container = None
+        for xpath in [
+            "./ancestor::div[contains(@class,'overflow')][1]",
+            "./ancestor::div[contains(@class,'scroll')][1]",
+            "./ancestor::div[contains(@class,'chat')][1]",
+            "./ancestor::div[contains(@class,'rightPane') or contains(@class,'right-pane')][1]",
+            "./ancestor::*[contains(@class,'message') or contains(@class,'content')][1]",
+            "./..",
+        ]:
+            try:
+                parent = first_block.find_element(By.XPATH, xpath)
+                if parent:
+                    sh = driver.execute_script("return arguments[0].scrollHeight;", parent)
+                    ch = driver.execute_script("return arguments[0].clientHeight;", parent)
+                    if sh > ch + 10:
+                        container = parent
+                        break
+            except Exception:
+                continue
+        if not container:
+            try:
+                container = driver.find_element(By.TAG_NAME, "body")
+            except Exception:
+                pass
+        last_count = -1
+        stable_rounds = 0
+        step_px = 400
+        for scroll_i in range(max_scrolls):
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)
+                count = len(els)
+                if count == last_count:
+                    stable_rounds += 1
+                    if stable_rounds >= 2:
+                        return count
+                else:
+                    stable_rounds = 0
+                last_count = count
+                if container:
+                    driver.execute_script(
+                        "arguments[0].scrollTop = Math.max(0, arguments[0].scrollTop - arguments[1]);",
+                        container,
+                        step_px,
+                    )
+                time.sleep(pause)
+            except Exception as e:
+                if debug:
+                    print(f"[DEBUG] count_messages scroll: {e}", file=sys.stderr)
+                break
+        els = driver.find_elements(By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)
+        return len(els)
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] count_messages_in_open_chat: {e}", file=sys.stderr)
+        return 0
+
+
+def _block_is_from_us(block, our_names):
+    """
+    ตรวจว่า chat block นี้เป็นฝั่งเราหรือไม่ (logic เดียวกับ is_last_message_from_us ต่อ 1 block)
+    - มี chat-header → เทียบ our_names (ตรง = เรา)
+    - ไม่มี chat-header → ดู class: chat-reverse = เรา, chat-secondary = ลูกค้า
+    คืน True/False; ถ้า element stale หรือ error คืน False
+    """
+    try:
+        span_els = block.find_elements(By.XPATH, CHAT_HEADER_SPAN_XPATH)
+        if span_els:
+            header_text = (span_els[0].text or span_els[0].get_attribute("textContent") or "").strip()
+            header_text = " ".join(header_text.split())
+            if our_names:
+                for name in our_names:
+                    if not name:
+                        continue
+                    name_norm = " ".join(name.strip().split())
+                    if name_norm and (header_text == name_norm or name_norm in header_text):
+                        return True
+            return False  # มี header แต่ไม่ตรงชื่อเรา = ลูกค้า
+        block_class = (block.get_attribute("class") or "").lower()
+        return "chat-reverse" in block_class
+    except Exception:
+        return False
+
+
+def count_exchanges_in_open_chat(driver, our_names=None, max_scrolls=50, pause=0.4, debug=False):
+    """
+    นับจำนวนบทสนทนา (ลูกค้าทักมา เราตอบกลับ = 1 บทสนทนา) ในหน้ารายละเอียดแชทที่เปิดอยู่
+    โหลดข้อความด้วย scroll แบบเดียวกับ count_messages_in_open_chat แล้วแยกฝั่งเรา/ลูกค้า
+    (chat-header เทียบ our_names; ไม่มี header ดู class chat-reverse=เรา chat-secondary=ลูกค้า)
+    คืนจำนวนบทสนทนา (int)
+    """
+    if our_names is None:
+        our_names = _get_our_chat_header_names()
+    try:
+        wait = WebDriverWait(driver, DEFAULT_WAIT)
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)))
+        except Exception:
+            pass
+        try:
+            first_block = driver.find_element(By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)
+        except Exception:
+            return 0
+        container = None
+        for xpath in [
+            "./ancestor::div[contains(@class,'overflow')][1]",
+            "./ancestor::div[contains(@class,'scroll')][1]",
+            "./ancestor::div[contains(@class,'chat')][1]",
+            "./ancestor::div[contains(@class,'rightPane') or contains(@class,'right-pane')][1]",
+            "./ancestor::*[contains(@class,'message') or contains(@class,'content')][1]",
+            "./..",
+        ]:
+            try:
+                parent = first_block.find_element(By.XPATH, xpath)
+                if parent:
+                    sh = driver.execute_script("return arguments[0].scrollHeight;", parent)
+                    ch = driver.execute_script("return arguments[0].clientHeight;", parent)
+                    if sh > ch + 10:
+                        container = parent
+                        break
+            except Exception:
+                continue
+        if not container:
+            try:
+                container = driver.find_element(By.TAG_NAME, "body")
+            except Exception:
+                pass
+        last_count = -1
+        stable_rounds = 0
+        step_px = 400
+        for scroll_i in range(max_scrolls):
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)
+                count = len(els)
+                if count == last_count:
+                    stable_rounds += 1
+                    if stable_rounds >= 2:
+                        break
+                else:
+                    stable_rounds = 0
+                last_count = count
+                if container:
+                    driver.execute_script(
+                        "arguments[0].scrollTop = Math.max(0, arguments[0].scrollTop - arguments[1]);",
+                        container,
+                        step_px,
+                    )
+                time.sleep(pause)
+            except Exception as e:
+                if debug:
+                    print(f"[DEBUG] count_exchanges scroll: {e}", file=sys.stderr)
+                break
+        blocks = driver.find_elements(By.CSS_SELECTOR, LAST_CHAT_BLOCK_CSS)
+        exchanges = 0
+        last_was_customer = False
+        for block in blocks:
+            try:
+                from_us = _block_is_from_us(block, our_names)
+            except Exception:
+                from_us = False
+            if from_us:
+                if last_was_customer:
+                    exchanges += 1
+                last_was_customer = False
+            else:
+                last_was_customer = True
+        return exchanges
+    except Exception as e:
+        if debug:
+            print(f"[DEBUG] count_exchanges_in_open_chat: {e}", file=sys.stderr)
+        return 0
+
+
 def get_read_today_and_yesterday_conversations(driver, wait_seconds=DEFAULT_WAIT, debug=False):
-    """ดึงรายการแชทที่อ่านแล้วของวันนี้ + เมื่อวาน แยกเป็น (today_list, yesterday_list)"""
+    """ดึงรายการแชทที่อ่านแล้วของวันนี้ + เมื่อวาน แยกเป็น (today_list, yesterday_list) — กรองรายการซ้ำ"""
     today_list = []
     yesterday_list = []
+    seen_today = set()
+    seen_yesterday = set()
     try:
         wait = WebDriverWait(driver, wait_seconds)
         for conv_xpath, _name_xpath, _preview_xpath, _time_xpath in CONVERSATION_SELECTORS:
@@ -423,25 +757,37 @@ def get_read_today_and_yesterday_conversations(driver, wait_seconds=DEFAULT_WAIT
                     if _is_time_today(time_text):
                         name_text = safe_find_text(conv, name_xpath)
                         message_text = safe_find_text(conv, preview_xpath)
-                        today_list.append({
-                            "sender": name_text or "(ไม่มีชื่อ)",
-                            "message": message_text or "(ไม่มีข้อความ)",
-                            "time": time_text or "(ไม่มีเวลา)",
-                            "element": conv,
-                        })
-                        if debug:
-                            print(f"[DEBUG] read+today: sender={name_text!r}, time={time_text!r}")
+                        sender = name_text or "(ไม่มีชื่อ)"
+                        message = message_text or "(ไม่มีข้อความ)"
+                        time_str = time_text or "(ไม่มีเวลา)"
+                        key = (sender, time_str, message)
+                        if key not in seen_today:
+                            seen_today.add(key)
+                            today_list.append({
+                                "sender": sender,
+                                "message": message,
+                                "time": time_str,
+                                "element": conv,
+                            })
+                            if debug:
+                                print(f"[DEBUG] read+today: sender={sender!r}, time={time_str!r}")
                     elif _is_time_yesterday(time_text):
                         name_text = safe_find_text(conv, name_xpath)
                         message_text = safe_find_text(conv, preview_xpath)
-                        yesterday_list.append({
-                            "sender": name_text or "(ไม่มีชื่อ)",
-                            "message": message_text or "(ไม่มีข้อความ)",
-                            "time": time_text or "(ไม่มีเวลา)",
-                            "element": conv,
-                        })
-                        if debug:
-                            print(f"[DEBUG] read+yesterday: sender={name_text!r}, time={time_text!r}")
+                        sender = name_text or "(ไม่มีชื่อ)"
+                        message = message_text or "(ไม่มีข้อความ)"
+                        time_str = time_text or "(ไม่มีเวลา)"
+                        key = (sender, time_str, message)
+                        if key not in seen_yesterday:
+                            seen_yesterday.add(key)
+                            yesterday_list.append({
+                                "sender": sender,
+                                "message": message,
+                                "time": time_str,
+                                "element": conv,
+                            })
+                            if debug:
+                                print(f"[DEBUG] read+yesterday: sender={sender!r}, time={time_str!r}")
                 except Exception as e:
                     if debug:
                         print(f"[DEBUG] skip conv: {e}")
@@ -633,6 +979,78 @@ def _send_report_to_openclaw_targets(message, send_openclaw_target):
         print(f"(ส่ง openclaw สำเร็จ {ok}/{len(targets)} target)", file=sys.stderr)
 
 
+# ความยาวสูงสุดต่อข้อความที่ส่ง Cliq (แบ่งส่งหลายข้อความถ้าเกิน) — เหมือน Airtable
+MAX_CLIQ_CHUNK = 6000
+
+
+def _split_text_chunks(text, max_len=MAX_CLIQ_CHUNK):
+    """แบ่งข้อความเป็น chunk ไม่เกิน max_len ตัวอักษร ตัดที่ newline ใกล้ปลาย"""
+    if not text or max_len is None or max_len <= 0:
+        return [text] if text else []
+    text = text.strip()
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if end < len(text):
+            break_at = text.rfind("\n", start, end + 1)
+            if break_at == -1:
+                break_at = text.rfind(" ", start, end + 1)
+            if break_at != -1 and break_at > start:
+                end = break_at + 1
+        chunks.append(text[start:end])
+        start = end
+    return chunks
+
+
+def send_to_cliq(text, webhook_url, chunk_size=MAX_CLIQ_CHUNK):
+    """
+    ส่งข้อความไปยัง Cliq ผ่าน Webhook (endpoint เดียวกับ Airtable)
+    ใช้ Channel URL: https://cliq.zoho.com/api/v2/channelsbyname/ชื่อช่อง/message?zapikey=xxx
+    คืน (True, จำนวนข้อความที่ส่ง) ถ้าสำเร็จ, (False, ข้อความ error) ถ้าไม่สำเร็จ
+    """
+    if requests is None:
+        print("ต้องติดตั้ง requests เพื่อส่งไป Cliq (pip install requests)", file=sys.stderr)
+        return False, "ไม่มีโมดูล requests"
+    url = (webhook_url or "").strip()
+    if not url:
+        return False, "ไม่พบ CLIQ_WEBHOOK_URL"
+    headers = {"Content-Type": "application/json"}
+    if chunk_size is None or chunk_size <= 0:
+        chunks = [text] if text else []
+    else:
+        chunks = _split_text_chunks(text, chunk_size)
+    for i, chunk in enumerate(chunks):
+        payload = {"text": chunk}
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=60)
+        except requests.RequestException as e:
+            return False, f"ข้อความที่ {i + 1}/{len(chunks)}: {e}"
+        if r.status_code not in (200, 201, 204):
+            return False, f"ข้อความที่ {i + 1}/{len(chunks)} — Cliq API {r.status_code}: {(r.text or '')[:150]}"
+        if len(chunks) > 1 and i < len(chunks) - 1:
+            time.sleep(0.3)
+    return True, len(chunks)
+
+
+def _send_report_to_cliq(message, cliq_webhook_url):
+    """ส่งรายงานไป Cliq (ใช้ CLIQ_WEBHOOK_URL เหมือน Airtable) — ส่งเป็นข้อความเดียว ถ้ายาวเกิน limit ค่อยแบ่ง chunk"""
+    if not message or not (cliq_webhook_url or "").strip():
+        return
+    text = message.strip()
+    # ส่งเป็นข้อความเดียวก่อน (chunk_size=None) เพื่อไม่ให้รายงานสั้นๆ ถูกแบ่งเป็น 2 ข้อความ
+    ok, result = send_to_cliq(text, cliq_webhook_url, chunk_size=None)
+    if not ok:
+        # ถ้าส่งครั้งแรกไม่สำเร็จ (เช่น ข้อความยาวเกิน limit) ให้ลองแบ่งส่งทีละ chunk
+        ok, result = send_to_cliq(text, cliq_webhook_url, chunk_size=MAX_CLIQ_CHUNK)
+    if ok:
+        print("(ส่งผลไป Cliq แล้ว)", file=sys.stderr)
+    else:
+        print(f"(ส่ง Cliq ไม่สำเร็จ: {result})", file=sys.stderr)
+
+
 def _random_delay(min_sec=0.5, max_sec=1.5):
     """รอแบบสุ่ม เพื่อให้พฤติกรรมดูไม่เป็นจังหวะซ้ำ (ลดโอกาสถูกตรวจจับว่าเป็น automation)"""
     time.sleep(random.uniform(min_sec, max_sec))
@@ -695,6 +1113,20 @@ def _reload_current_page_and_wait(driver, wait_seconds=DEFAULT_WAIT):
         except Exception:
             continue
     time.sleep(0.5)
+
+
+def _set_zoom(driver, percent):
+    """ตั้งค่า zoom หน้าเว็บ (percent เช่น 25 = 25%) เพื่อให้โหลดข้อมูลได้มากขึ้น"""
+    if percent <= 0:
+        return
+    scale = percent / 100.0
+    try:
+        driver.execute_script(
+            "document.documentElement.style.zoom = arguments[0]; document.body.style.zoom = arguments[0];",
+            str(scale),
+        )
+    except Exception:
+        pass
 
 
 def is_last_message_from_us(driver, our_names, wait_seconds=5):
@@ -861,7 +1293,7 @@ def _parse_ports(port_string, default_port, count):
     return parts[:count]
 
 
-def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, debug=False, max_hours=None, chrome_debug_port=None, chrome_debug_ports=None, report_format="full", send_openclaw_target=None, for_test=False):
+def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, debug=False, max_hours=None, chrome_debug_port=None, chrome_debug_ports=None, report_format="full", cliq_webhook_url=None, for_test=False):
     """
     รันตรวจสอบข้อความที่ยังไม่อ่านต่อเนื่อง
     url รับได้เป็น URL เดียว หรือหลาย URL คั่นด้วย comma (หลายห้องแชท)
@@ -983,19 +1415,19 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                         lines.append(f"【{room}】")
                         if total_today_yesterday:
                             if unread_today:
-                                lines.append(f"📥 ยังไม่อ่าน วันนี้ [รวม {len(unread_today)} รายการ]")
+                                lines.append(f"📥 Line ยังไม่อ่าน วันนี้ [รวม {len(unread_today)} รายการ]")
                                 for msg in unread_today:
                                     lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']} น.**")
                                 lines.append("")
                             if unread_yesterday:
-                                lines.append(f"📥 ยังไม่อ่าน เมื่อวาน [รวม {len(unread_yesterday)} รายการ]")
+                                lines.append(f"📥 Line ยังไม่อ่าน เมื่อวาน [รวม {len(unread_yesterday)} รายการ]")
                                 for msg in unread_yesterday:
                                     lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']}**")
                                 lines.append("")
-                            lines.append(f"--- {room}: ยังไม่อ่านรวม {total_today_yesterday} รายการ ---")
+                            lines.append(f"--- {room}: Line ยังไม่อ่านรวม {total_today_yesterday} รายการ ---")
                             lines.append("")
                         else:
-                            lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
+                            lines.append("Line: ไม่พบข้อความที่ยังไม่ได้อ่าน")
                         d.quit()
                     except Exception as e:
                         if debug:
@@ -1003,7 +1435,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                         lines.append(f"【{_room_label_from_url(one_url, i)}】")
                         lines.append(f"(ผิดพลาด: {e})")
                         lines.append("")
-                lines.append(f"--- สรุปทุกห้อง: ยังไม่อ่านรวม {grand_total} รายการ (วันนี้+เมื่อวาน) ---")
+                lines.append(f"--- สรุปทุกห้อง: Line ยังไม่อ่านรวม {grand_total} รายการ (วันนี้+เมื่อวาน) ---")
             else:
                 for i, one_url in enumerate(urls):
                     if len(urls) > 1:
@@ -1024,28 +1456,28 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                         lines.append(f"【{room}】")
                     if total_today_yesterday:
                         if unread_today:
-                            lines.append(f"📥 ยังไม่อ่าน วันนี้ [รวม {len(unread_today)} รายการ]")
+                            lines.append(f"📥 Line ยังไม่อ่าน วันนี้ [รวม {len(unread_today)} รายการ]")
                             for msg in unread_today:
                                 lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']} น.**")
                             lines.append("")
                         if unread_yesterday:
-                            lines.append(f"📥 ยังไม่อ่าน เมื่อวาน [รวม {len(unread_yesterday)} รายการ]")
+                            lines.append(f"📥 Line ยังไม่อ่าน เมื่อวาน [รวม {len(unread_yesterday)} รายการ]")
                             for msg in unread_yesterday:
                                 lines.append(f"ชื่อ: **{msg['sender']}** เวลา: **{msg['time']}**")
                             lines.append("")
                         if len(urls) > 1:
-                            lines.append(f"--- {room}: ยังไม่อ่านรวม {total_today_yesterday} รายการ ---")
+                            lines.append(f"--- {room}: Line ยังไม่อ่านรวม {total_today_yesterday} รายการ ---")
                             lines.append("")
                     elif len(urls) == 1:
-                        lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
+                        lines.append("Line: ไม่พบข้อความที่ยังไม่ได้อ่าน")
                 if len(urls) > 1:
-                    lines.append(f"--- สรุปทุกห้อง: ยังไม่อ่านรวม {grand_total} รายการ (วันนี้+เมื่อวาน) ---")
+                    lines.append(f"--- สรุปทุกห้อง: Line ยังไม่อ่านรวม {grand_total} รายการ (วันนี้+เมื่อวาน) ---")
                 elif grand_total == 0 and urls:
-                    lines.append("ไม่พบข้อความที่ยังไม่ได้อ่าน")
+                    lines.append("Line: ไม่พบข้อความที่ยังไม่ได้อ่าน")
             report_text = "\n".join(lines)
             print(report_text)
-            if send_openclaw_target:
-                _send_report_to_openclaw_targets(report_text, send_openclaw_target)
+            if cliq_webhook_url:
+                _send_report_to_cliq(report_text, cliq_webhook_url)
             return  # จบการทำงานหลังจากรายงาน
 
         # รายงานอ่านแล้วแต่ยังไม่ตอบของวันนี้ (one-shot)
@@ -1069,20 +1501,20 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                         grand_total += total
                         lines.append(f"【{room}】")
                         if read_not_replied_today:
-                            lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ วันนี้ [รวม {len(read_not_replied_today)} รายการ]")
+                            lines.append(f"📋 Line อ่านแล้วแต่ยังไม่ตอบ วันนี้ [รวม {len(read_not_replied_today)} รายการ]")
                             for msg in read_not_replied_today:
                                 lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
                             lines.append("")
                         if read_not_replied_yesterday:
-                            lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ เมื่อวาน [รวม {len(read_not_replied_yesterday)} รายการ]")
+                            lines.append(f"📋 Line อ่านแล้วแต่ยังไม่ตอบ เมื่อวาน [รวม {len(read_not_replied_yesterday)} รายการ]")
                             for msg in read_not_replied_yesterday:
                                 lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
                             lines.append("")
                         if total:
-                            lines.append(f"--- {room}: อ่านแล้วแต่ยังไม่ตอบ รวม {total} รายการ ---")
+                            lines.append(f"--- {room}: Line อ่านแล้วแต่ยังไม่ตอบ รวม {total} รายการ ---")
                             lines.append("")
                         else:
-                            lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
+                            lines.append("Line: ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
                             lines.append("")
                         d.quit()
                     except Exception as e:
@@ -1091,7 +1523,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                         lines.append(f"【{_room_label_from_url(one_url, i)}】")
                         lines.append(f"(ผิดพลาด: {e})")
                         lines.append("")
-                lines.append(f"--- สรุปทุกห้อง: อ่านแล้วแต่ยังไม่ตอบ รวม {grand_total} รายการ ---")
+                lines.append(f"--- สรุปทุกห้อง: Line อ่านแล้วแต่ยังไม่ตอบ รวม {grand_total} รายการ ---")
             else:
                 for i, one_url in enumerate(urls):
                     if len(urls) > 1 and driver:
@@ -1111,32 +1543,32 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                     if len(urls) > 1:
                         lines.append(f"【{room}】")
                     if read_not_replied_today:
-                        lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ วันนี้ [รวม {len(read_not_replied_today)} รายการ]")
+                        lines.append(f"📋 Line อ่านแล้วแต่ยังไม่ตอบ วันนี้ [รวม {len(read_not_replied_today)} รายการ]")
                         for msg in read_not_replied_today:
                             lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
                         lines.append("")
                     if read_not_replied_yesterday:
-                        lines.append(f"📋 อ่านแล้วแต่ยังไม่ตอบ เมื่อวาน [รวม {len(read_not_replied_yesterday)} รายการ]")
+                        lines.append(f"📋 Line อ่านแล้วแต่ยังไม่ตอบ เมื่อวาน [รวม {len(read_not_replied_yesterday)} รายการ]")
                         for msg in read_not_replied_yesterday:
                             lines.append(f"ชื่อ: **{msg['sender']}** ข้อความ: **{msg['message']}** เวลา: **{msg['time']}**")
                         lines.append("")
                     if total and len(urls) > 1:
-                        lines.append(f"--- {room}: อ่านแล้วแต่ยังไม่ตอบ รวม {total} รายการ ---")
+                        lines.append(f"--- {room}: Line อ่านแล้วแต่ยังไม่ตอบ รวม {total} รายการ ---")
                         lines.append("")
                     elif not total and len(urls) == 1:
-                        lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
+                        lines.append("Line: ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
                         lines.append("")
-                        lines.append("--- สรุป: อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
+                        lines.append("--- สรุป: Line อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
                 if len(urls) > 1:
-                    lines.append(f"--- สรุปทุกห้อง: อ่านแล้วแต่ยังไม่ตอบ รวม {grand_total} รายการ ---")
+                    lines.append(f"--- สรุปทุกห้อง: Line อ่านแล้วแต่ยังไม่ตอบ รวม {grand_total} รายการ ---")
                 elif len(urls) == 1 and grand_total == 0 and not lines:
-                    lines.append("ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
+                    lines.append("Line: ไม่พบรายการที่อ่านแล้วและยังไม่ตอบ (วันนี้และเมื่อวาน)")
                     lines.append("")
-                    lines.append("--- สรุป: อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
+                    lines.append("--- สรุป: Line อ่านแล้วแต่ยังไม่ตอบ 0 รายการ ---")
             report_text = "\n".join(lines)
             print(report_text)
-            if send_openclaw_target:
-                _send_report_to_openclaw_targets(report_text, send_openclaw_target)
+            if cliq_webhook_url:
+                _send_report_to_cliq(report_text, cliq_webhook_url)
             return
 
         # โหมดรันต่อเนื่อง (สำหรับรันด้วยตนเอง) — ไม่รองรับหลาย port (ใช้ port เดียวหลายแท็บ)
@@ -1168,7 +1600,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                     room = _room_label_from_url(one_url, i)
                     current_unread_messages = get_unread_messages(driver, wait_seconds=5, debug=debug)
                     if current_unread_messages:
-                        print(f"\n--- 【{room}】 ข้อความที่ยังไม่อ่าน (ปัจจุบัน) ---")
+                        print(f"\n--- 【{room}】 Line ข้อความที่ยังไม่อ่าน (ปัจจุบัน) ---")
                         for msg in current_unread_messages:
                             print(f"ชื่อ: **{msg['sender']}**")
                             print(f"ข้อความ: **{msg['message']}**")
@@ -1176,7 +1608,7 @@ def scrape_line_oa_unread_messages_continuous(url, check_interval_seconds=60, de
                             print()
                         print(f"รวม {len(current_unread_messages)} รายการ\n")
                     elif len(urls) == 1:
-                        print("ไม่พบข้อความที่ยังไม่อ่าน")
+                        print("Line: ไม่พบข้อความที่ยังไม่อ่าน")
                 if len(urls) > 1:
                     print("--- จบทุกห้อง ---\n")
             except Exception as e:
@@ -1202,7 +1634,7 @@ if __name__ == "__main__":
     line_oa_port_env = (os.environ.get("LINE_OA_CHROME_DEBUG_PORT") or os.environ.get("CHROME_DEBUG_PORT") or "").strip()
     chrome_port = line_oa_port_env or None
     line_oa_ports = (os.environ.get("LINE_OA_PORTS", "") or "").strip() or (line_oa_port_env or None)
-    default_openclaw = (os.environ.get("LINE_OA_OPENCLAW_TARGET", "") or "").strip() or None
+    default_cliq_url = (os.environ.get("CLIQ_WEBHOOK_URL", "") or "").strip() or None
     parser = argparse.ArgumentParser(description="LINE OA - ตรวจสอบข้อความที่ยังไม่อ่าน")
     parser.add_argument("--url", default=default_url, help="URL หน้าแชท LINE OA (หลายห้องคั่นด้วย comma ได้)")
     parser.add_argument("--interval", type=int, default=default_interval, help="ระยะห่างตรวจสอบ วินาที")
@@ -1212,12 +1644,16 @@ if __name__ == "__main__":
     parser.add_argument("--ports", type=str, default=line_oa_ports, metavar="PORTS", help="รายการ port คั่น comma สอดคล้องกับ --url (หรือใช้ LINE_OA_PORTS / LINE_OA_CHROME_DEBUG_PORT ใน .env)")
     parser.add_argument("--report-format", type=str, choices=["full", "summary-once", "read-not-replied-today"], default="full",
                         help="รูปแบบการรายงาน: full (ข้อความเต็ม), summary-once (ชื่อและเวลา, รันครั้งเดียว), read-not-replied-today (อ่านแล้วยังไม่ตอบของวันนี้)")
-    parser.add_argument("--send-openclaw-target", type=str, default=default_openclaw, metavar="TARGET",
-                        help="ส่งผลรายงานไป openclaw -t TARGET (หรือใช้ LINE_OA_OPENCLAW_TARGET ใน .env)")
+    parser.add_argument("--cliq", action="store_true", help="ส่งผลรายงานไป Cliq (ใช้ CLIQ_WEBHOOK_URL ใน .env)")
+    parser.add_argument("--cliq-webhook-url", type=str, default=default_cliq_url, metavar="URL",
+                        help="Webhook URL ของ Cliq (หรือใช้ CLIQ_WEBHOOK_URL ใน .env)")
     parser.add_argument("--for-test", action="store_true", dest="for_test",
                         help="โหมดทดสอบ: ใช้กับ read-not-replied-today — เช็คเฉพาะแชทที่แสดง Yesterday")
     args = parser.parse_args()
 
+    cliq_url = (args.cliq_webhook_url or "").strip() if (args.cliq or args.cliq_webhook_url) else None
+    if args.cliq and not cliq_url:
+        cliq_url = default_cliq_url
     scrape_line_oa_unread_messages_continuous(
         args.url,
         check_interval_seconds=args.interval,
@@ -1226,6 +1662,6 @@ if __name__ == "__main__":
         chrome_debug_port=args.connect_chrome,
         chrome_debug_ports=args.ports,
         report_format=args.report_format,
-        send_openclaw_target=args.send_openclaw_target,
+        cliq_webhook_url=cliq_url,
         for_test=args.for_test,
     )

@@ -40,7 +40,7 @@ def main():
     chrome_port = (
         (os.environ.get("FB_CHROME_DEBUG_PORT") or os.environ.get("CHROME_DEBUG_PORT") or "").strip() or None
     )
-    openclaw_target = (os.environ.get("LINE_OA_OPENCLAW_TARGET") or "").strip() or None
+    cliq_webhook_url = (os.environ.get("CLIQ_WEBHOOK_URL") or "").strip() or None
     fb_inbox_urls = (os.environ.get("FB_INBOX_URL") or "").strip() or None
 
     parser = argparse.ArgumentParser(
@@ -77,21 +77,23 @@ def main():
         action="store_true",
         help="ไม่เลื่อนรายการ",
     )
+    parser.add_argument("--cliq", action="store_true", help="ส่งผลรายงานไป Cliq (ใช้ CLIQ_WEBHOOK_URL ใน .env)")
     parser.add_argument(
-        "--send-openclaw-target",
+        "--cliq-webhook-url",
         type=str,
-        default=openclaw_target,
-        metavar="TARGET",
-        help="ส่งผลไป openclaw (หรือใช้ LINE_OA_OPENCLAW_TARGET ใน .env)",
+        default=cliq_webhook_url,
+        metavar="URL",
+        help="Webhook URL ของ Cliq (หรือใช้ CLIQ_WEBHOOK_URL ใน .env)",
     )
     parser.add_argument("--debug", action="store_true", help="โหมด debug")
     args = parser.parse_args()
 
+    cliq_url = (args.cliq_webhook_url or "").strip() or (cliq_webhook_url if args.cliq else None)
     scrape_facebook_inbox(
         urls=args.urls,
         report_format="read-not-replied-today",
         chrome_debug_port=args.connect_chrome,
-        send_openclaw_target=args.send_openclaw_target,
+        cliq_webhook_url=cliq_url,
         unread_only=False,
         within_days=args.within_days,
         within_today_only=args.today_only,

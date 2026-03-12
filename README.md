@@ -11,7 +11,7 @@
 | Facebook Inbox | ยังไม่อ่าน | รายงานแชท Facebook ที่ยังไม่อ่าน |
 | Facebook Inbox | อ่านแล้วแต่ยังไม่ตอบ | แชท Facebook ที่อ่านแล้วแต่ยังไม่ตอบ |
 
-รองรับการส่งผลไป OpenClaw (ถ้ากำหนด `LINE_OA_OPENCLAW_TARGET` ใน `.env`)
+รองรับการส่งผลไป Cliq (ถ้ากำหนด `CLIQ_WEBHOOK_URL` ใน `.env` — endpoint เดียวกับ Airtable)
 
 ---
 
@@ -48,7 +48,7 @@ cp .env.example .env
 | `LINE_OA_CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับ LINE OA (หนึ่งหรือหลาย port คั่น comma เช่น `9222,9223`) — ถ้าไม่ตั้ง จะใช้ `CHROME_DEBUG_PORT` |
 | `FB_CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับ Facebook Inbox (หนึ่งหรือหลาย port คั่น comma เช่น `9224,9225`) — ถ้าไม่ตั้ง จะใช้ `CHROME_DEBUG_PORT` |
 | `CHROME_DEBUG_PORT` | ค่า fallback เมื่อไม่ตั้ง `LINE_OA_CHROME_DEBUG_PORT` / `FB_CHROME_DEBUG_PORT` — ค่าเริ่มต้น 9222 |
-| `LINE_OA_OPENCLAW_TARGET` | (ถ้าต้องการ) ส่งผลรายงานไป OpenClaw ที่ target นี้ เช่น `webchat` |
+| `CLIQ_WEBHOOK_URL` | (ถ้าต้องการ) ส่งผลรายงานไป Cliq — Webhook URL จาก Cliq Channel (เหมือน Airtable) |
 | `FB_INBOX_URL` | URL ของ Facebook Inbox (หลายลิงก์คั่นด้วย comma) |
 | `FB_CHROME_DEBUG_PORT` | พอร์ต Chrome สำหรับ Facebook Inbox เช่น `9224` |
 | `FB_CHROME_DEBUG_PROFILE` | หมายเลข profile Chrome สำหรับ Facebook เช่น `3` |
@@ -108,7 +108,7 @@ start_chrome_for_script.bat
 **รายงานข้อความที่ยังไม่อ่าน (รันครั้งเดียว แล้วจบ)**
 
 ```bash
-python line_oa_unread_messages.py --url "https://chat.line.biz/..." --connect-chrome 9222 --report-format summary-once --send-openclaw-target webchat
+python line_oa_unread_messages.py --url "https://chat.line.biz/..." --connect-chrome 9222 --report-format summary-once --cliq
 ```
 
 **หลายห้องแชท** — ใส่หลาย URL คั่นด้วย comma ใน `--url` หรือใน `LINE_OA_URL`:
@@ -120,13 +120,13 @@ python line_oa_unread_messages.py --url "https://chat.line.biz/xxx,https://chat.
 ถ้าตั้ง `LINE_OA_URL` และ `LINE_OA_CHROME_DEBUG_PORT` ใน `.env` แล้ว สามารถย่อเป็น:
 
 ```bash
-python line_oa_unread_messages.py --connect-chrome 9222 --report-format summary-once --send-openclaw-target webchat
+python line_oa_unread_messages.py --connect-chrome 9222 --report-format summary-once --cliq
 ```
 
 **รายงานอ่านแล้วแต่ยังไม่ตอบของวันนี้ (รันครั้งเดียว)**
 
 ```bash
-python line_oa_read_not_replied_once.py --connect-chrome 9222 --send-openclaw-target webchat
+python line_oa_read_not_replied_once.py --connect-chrome 9222 --cliq
 ```
 
 หรือใช้ค่าจาก `.env` โดยไม่ต้องส่งอาร์กิวเมนต์ (ต้องมี `LINE_OA_URL`).
@@ -157,14 +157,14 @@ python line_oa_read_not_replied_once.py --connect-chrome 9222 --send-openclaw-ta
    `crontab -e`
 3. คัดลอกจาก `crontab.example` แล้วแก้ path `WORKSPACE` ให้ตรงกับเครื่องคุณ
 
-**ถ้า Cron รันแล้ว OpenClaw ไม่ส่งไป LINE** — อ่าน [CRON_OPENCLAW.md](CRON_OPENCLAW.md) (ตั้ง HOME/PATH ใน crontab และให้ OpenClaw Gateway รันอยู่)
+**ส่งผลไป Cliq** — ตั้ง `CLIQ_WEBHOOK_URL` ใน `.env` (Channel Webhook URL จาก Cliq) สคริปต์จะส่งรายงานไป Cliq อัตโนมัติเมื่อรันด้วย `--cliq` หรือเมื่อ shell script โหลด .env
 
 **Windows**
 
 ใช้ Task Scheduler ตั้งเวลาให้รัน `start_chrome_for_script.bat` (ถ้าต้องการให้ Chrome พร้อม) แล้วตั้ง task แยกให้รัน Python เช่น:
 
-- งานรายชั่วโมง: เรียก `line_oa_unread_messages.py` ด้วย `--report-format summary-once` ที่ 8:30, 9:30, …, 17:30
-- งานรายวัน: เรียก `line_oa_read_not_replied_once.py` ที่ 17:35
+- งานรายชั่วโมง: เรียก `line_oa_unread_messages.py` ด้วย `--report-format summary-once --cliq` ที่ 8:30, 9:30, …, 17:30
+- งานรายวัน: เรียก `line_oa_read_not_replied_once.py --cliq` ที่ 17:35
 
 หรือใช้ WSL แล้วใช้ cron ตาม `crontab.example` ก็ได้
 
@@ -256,7 +256,7 @@ python facebook_read_not_replied.py --debug
 | `fb_scroll_load.py` | เลื่อนลงจนเจอ วว/ดด/ปป → เลื่อนขึ้น → ตรวจ 2 ครั้ง → dedup |
 | `fb_get_threads.py` | ดึงรายการแชทจากหน้า Inbox |
 | `fb_report.py` | สร้างรายงานจัดกลุ่มตามลิงก์ |
-| `fb_openclaw.py` | ส่งรายงานไป OpenClaw |
+| `fb_openclaw.py` | ส่งรายงานไป Cliq (หรือ OpenClaw ถ้าใช้ฟังก์ชันเดิม) |
 | `run_facebook_job.sh` | Wrapper: รันรายงานยังไม่อ่าน |
 | `run_facebook_read_not_replied_job.sh` | Wrapper: รันรายงานอ่านแล้วแต่ยังไม่ตอบ |
 

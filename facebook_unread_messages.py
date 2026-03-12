@@ -15,7 +15,7 @@ from fb_open_tab import open_new_tab, close_current_tab
 from fb_get_threads import debug_page_structure, DEFAULT_WAIT, WITHIN_DAYS_DEFAULT
 from fb_scroll_load import scroll_load_threads
 from fb_report import build_report
-from fb_openclaw import send_report_to_openclaw
+from fb_openclaw import send_report_to_openclaw, send_report_to_cliq
 
 
 def _load_dotenv():
@@ -71,7 +71,7 @@ def _scrape_one_url(driver, url, report_format, unread_only, within_days,
 
 
 def scrape_facebook_inbox(urls=None, report_format="summary-once", chrome_debug_port=None,
-                          send_openclaw_target=None, unread_only=True, within_days=WITHIN_DAYS_DEFAULT,
+                          cliq_webhook_url=None, unread_only=True, within_days=WITHIN_DAYS_DEFAULT,
                           within_today_only=False, scroll_to_load_week=True, debug=False):
     """
     เชื่อมต่อ Chrome → สร้างแท็บใหม่สำหรับแต่ละ URL → สแกน → ปิดแท็บ → รายงานรวม
@@ -118,8 +118,8 @@ def scrape_facebook_inbox(urls=None, report_format="summary-once", chrome_debug_
             within_today_only=within_today_only,
         )
         print(report_text)
-        if send_openclaw_target:
-            send_report_to_openclaw(report_text, send_openclaw_target)
+        if cliq_webhook_url:
+            send_report_to_cliq(report_text, cliq_webhook_url)
     finally:
         if driver_owned:
             try:
@@ -133,7 +133,7 @@ if __name__ == "__main__":
     chrome_port = (
         (os.environ.get("FB_CHROME_DEBUG_PORT") or os.environ.get("CHROME_DEBUG_PORT") or "").strip() or None
     )
-    openclaw_target = (os.environ.get("LINE_OA_OPENCLAW_TARGET") or "").strip() or None
+    cliq_webhook_url = (os.environ.get("CLIQ_WEBHOOK_URL") or "").strip() or None
     fb_inbox_urls = (os.environ.get("FB_INBOX_URL") or "").strip() or None
 
     parser = argparse.ArgumentParser(
@@ -153,8 +153,9 @@ if __name__ == "__main__":
                         help="กรองเฉพาะแชทภายใน N วัน (ค่าเริ่มต้น 3 = วันนี้, เมื่อวาน, เมื่อวานก่อน)")
     parser.add_argument("--no-scroll", action="store_true",
                         help="ไม่เลื่อนรายการ (ใช้เฉพาะแถวที่โหลดบนหน้าปัจจุบัน)")
-    parser.add_argument("--send-openclaw-target", type=str, default=openclaw_target, metavar="TARGET",
-                        help="ส่งผลไป openclaw -t TARGET (หรือใช้ LINE_OA_OPENCLAW_TARGET ใน .env)")
+    parser.add_argument("--cliq", action="store_true", help="ส่งผลรายงานไป Cliq (ใช้ CLIQ_WEBHOOK_URL ใน .env)")
+    parser.add_argument("--cliq-webhook-url", type=str, default=cliq_webhook_url, metavar="URL",
+                        help="Webhook URL ของ Cliq (หรือใช้ CLIQ_WEBHOOK_URL ใน .env)")
     parser.add_argument("--debug", action="store_true", help="โหมด debug")
     args = parser.parse_args()
 
@@ -162,7 +163,7 @@ if __name__ == "__main__":
         urls=args.urls,
         report_format="summary-once",
         chrome_debug_port=args.connect_chrome,
-        send_openclaw_target=args.send_openclaw_target,
+        cliq_webhook_url=(args.cliq_webhook_url or "").strip() or (cliq_webhook_url if args.cliq else None),
         unread_only=args.unread_only,
         within_days=args.within_days,
         within_today_only=args.today_only,

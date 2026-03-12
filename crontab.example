@@ -1,9 +1,8 @@
 # LINE OA - ตัวอย่าง crontab
 # ใส่ใน crontab -e แล้วแก้ค่าด้านล่างให้ตรงกับเครื่องคุณ
 #
-# สำคัญ: เพื่อให้ OpenClaw ส่งข้อความไป LINE ได้เมื่อรันจาก cron
-# 1) ต้องให้ OpenClaw Gateway รันอยู่ตลอด (เช่น รันเป็น service / launchd) — ดู CRON_OPENCLAW.md
-# 2) ต้องตั้ง HOME และ PATH ใน crontab ให้ตรงกับตอนรันด้วยมือ (เปิดเทอร์มินัลแล้ว echo $HOME และ echo $PATH)
+# ส่งผลไป Cliq: ตั้ง CLIQ_WEBHOOK_URL ใน .env (Channel Webhook URL จาก Cliq)
+# ตั้ง HOME และ PATH ใน crontab ให้ตรงกับตอนรันด้วยมือ (เปิดเทอร์มินัลแล้ว echo $HOME และ echo $PATH)
 
 SHELL=/bin/bash
 # แก้เป็น home จริงของคุณ (เช่น /Users/yourname) — ใช้คำสั่ง echo $HOME ในเทอร์มินัลดู
@@ -20,6 +19,6 @@ WORKSPACE="${HOME}/.openclaw/workspace/LineWebScraping"
 
 # หมายเหตุ:
 # - สร้างโฟลเดอร์ logs: mkdir -p "$WORKSPACE/logs"
-# - .env ต้องมี LINE_OA_OPENCLAW_TARGET=webchat (หรือ target ที่ส่งไป LINE)
+# - .env ต้องมี CLIQ_WEBHOOK_URL=... (Webhook URL จาก Cliq Channel) ถ้าต้องการส่งรายงานไป Cliq
 # - Timezone ตามระบบ (ดู: date หรือ timedatectl)
 # - Windows: ใช้ Task Scheduler หรือ WSL+cron
